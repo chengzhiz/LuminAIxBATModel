@@ -1,2 +1,21 @@
-FloorSupport/dataset/floor_support_downloaded/
+# Datasets — large binary/JSON data, not tracked
+**/dataset/
+!**/dataset/create_dataset_splits.py
+
+# Model checkpoints
+**/checkpoints/
+
+# OS
 .DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+**/.pytest_cache/
+
+# Notebook outputs
+*.ipynb_checkpoints/

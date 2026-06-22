@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skeleton Viewer — BAT Model</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1a1a2e; color: #eee; overflow: hidden; }
+  #container { position: fixed; inset: 0; }
+  #controls {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: rgba(0,0,0,0.85); padding: 12px 20px;
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    border-top: 1px solid #333; z-index: 10;
+  }
+  #controls label { font-size: 12px; color: #aaa; }
+  #controls input[type=range] { width: 200px; accent-color: #4fc3f7; }
+  #controls button {
+    background: #4fc3f7; border: none; color: #000; padding: 6px 14px;
+    border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px;
+  }
+  #controls button:hover { background: #81d4fa; }
+  #info {
+    position: fixed; top: 12px; left: 16px;
+    background: rgba(0,0,0,0.8); padding: 8px 14px; border-radius: 6px;
+    font-size: 13px; z-index: 10; max-width: 380px;
+  }
+  #instructions {
+    position: fixed; top: 12px; right: 16px;
+    background: rgba(0,0,0,0.75); padding: 10px 14px; border-radius: 6px;
+    font-size: 11px; z-index: 10; line-height: 1.7; color: #aaa;
+    max-height: calc(100vh - 40px); overflow-y: auto;
+  }
+  #instructions b { color: #4fc3f7; }
+  #instructions kbd {
+    background: #333; color: #eee; padding: 1px 5px; border-radius: 3px;
+    font-family: monospace; font-size: 10px; border: 1px solid #555;
+  }
+  #sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; width: 260px;
+    background: rgba(0,0,0,0.85); z-index: 20; display: none;
+    flex-direction: column; border-right: 1px solid #333;
+    font-size: 12px;
+  }
+  #sidebar.open { display: flex; }
+  #sidebar-header {
+    padding: 10px 12px; border-bottom: 1px solid #333;
+    display: flex; gap: 6px; align-items: center; flex-shrink: 0;
+  }
+  #sidebar-header button {
+    background: #333; border: none; color: #ccc; padding: 4px 8px;
+    border-radius: 3px; cursor: pointer; font-size: 11px;
+  }
+  #sidebar-header button:hover { background: #555; }
+  #sidebar-header span { flex: 1; color: #aaa; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #file-tree {
+    flex: 1; overflow-y: auto; padding: 6px 0;
+  }
+  .tree-item {
+    padding: 3px 12px; cursor: pointer; color: #bbb; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; user-select: none;
+  }
+  .tree-item:hover { background: rgba(255,255,255,0.08); }
+  .tree-item.active { background: rgba(79,195,247,0.2); color: #4fc3f7; font-weight: bold; }
+  .tree-item.folder { color: #aaa; font-size: 11px; padding-left: 6px; cursor: default; font-weight: 600; letter-spacing: 0.5px; }
+  .tree-item.folder:hover { background: transparent; }
+  #btn-toggle-sidebar {
+    position: fixed; left: 8px; bottom: 60px; z-index: 25;
+    background: rgba(0,0,0,0.7); border: 1px solid #444; color: #ccc;
+    padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  #btn-toggle-sidebar:hover { background: #444; }
+  #modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200;
+    display: none; align-items: center; justify-content: center;
+  }
+  #modal-overlay.show { display: flex; }
+  #modal-box {
+    background: #1e1e30; border: 2px solid #4fc3f7; border-radius: 10px;
+    padding: 24px 30px; text-align: center; max-width: 420px;
+  }
+  #modal-box h3 { color: #4fc3f7; margin: 0 0 10px 0; font-size: 16px; }
+  #modal-box p { color: #ccc; font-size: 14px; line-height: 1.6; margin: 0 0 20px 0; }
+  #modal-box .size { color: #fff; font-size: 20px; font-weight: bold; }
+  #modal-box button {
+    background: #4fc3f7; border: none; color: #000; padding: 8px 24px;
+    border-radius: 5px; cursor: pointer; font-weight: 600; font-size: 14px; margin: 0 6px;
+  }
+  #modal-box button.cancel { background: #555; color: #ccc; }
+  #dropzone {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    z-index: 100; pointer-events: none; opacity: 0; transition: opacity 0.2s;
+  }
+  #dropzone.active { opacity: 1; }
+  #dropzone div {
+    background: rgba(79,195,247,0.95); color: #000; padding: 40px 60px;
+    border-radius: 12px; font-size: 20px; font-weight: bold;
+  }
+  #frame-counter { color: #4fc3f7; font-weight: bold; font-size: 14px; min-width: 60px; }
+  #speed-label { color: #aaa; font-size: 12px; min-width: 40px; }
+</style>
+</head>
+<body>
+
+<div id="container"></div>
+<div id="info">
+  <div id="file-name">Drop a JSON file or click <b>Load JSON</b></div>
+  <div id="class-label" style="color:#81d4fa;margin-top:4px;"></div>
+  <div id="pos-label" style="color:#888;margin-top:2px;font-size:11px;"></div>
+  <div id="height-label" style="color:#ffa726;margin-top:2px;font-size:11px;"></div>
+  <div id="floor-label" style="color:#44aacc;margin-top:2px;font-size:11px;display:none;"></div>
+</div>
+<div id="instructions">
+  <b>Mouse</b><br>
+  &nbsp;&nbsp;drag = rotate &nbsp;|&nbsp; scroll = zoom<br>
+  &nbsp;&nbsp;right-drag = pan<br>
+  <b>Keyboard</b><br>
+  &nbsp;&nbsp;<kbd>Space</kbd> play/pause<br>
+  &nbsp;&nbsp;<kbd>←</kbd><kbd>→</kbd> frame back/forward<br>
+  &nbsp;&nbsp;<kbd>F</kbd> fit view on skeleton<br>
+  <br>
+  <b>Scene legend</b><br>
+  &nbsp;&nbsp;<span style="color:#ffa726">Skeleton height</span> in top-left info<br>
+  &nbsp;&nbsp;<span style="color:#888">⬚ gray grid</span> = mocap origin (y=0)<br>
+  &nbsp;&nbsp;<span style="color:#4fc3f7">⬚ blue plane</span> = estimated floor<br>
+  &nbsp;&nbsp;<span style="color:#f44">━ red</span>/<span style="color:#4f4">━ green</span>/<span style="color:#44f">━ blue</span> = X/Y/Z axes<br>
+  &nbsp;&nbsp;<span style="color:#66bb6a">● green</span> = spine &nbsp;
+  <span style="color:#42a5f5">● blue</span> = arms<br>
+  &nbsp;&nbsp;<span style="color:#ffa726">● orange</span> = legs &nbsp;
+  <span style="color:#ff7043">● coral</span> = head<br>
+  &nbsp;&nbsp;<span style="color:#fff">● white</span> = fingers
+</div>
+<div id="dropzone"><div>Drop JSON file here</div></div>
+<div id="modal-overlay">
+  <div id="modal-box">
+    <h3>📁 Load Folder</h3>
+    <p id="modal-msg"></p>
+    <button id="modal-ok">Load</button>
+    <button class="cancel" id="modal-cancel">Cancel</button>
+  </div>
+</div>
+
+<div id="sidebar">
+  <div id="sidebar-header">
+    <span id="sidebar-title">No folder loaded</span>
+    <button onclick="document.getElementById('folder-input').click()">📁 Open</button>
+    <button onclick="toggleSidebar()">✕</button>
+  </div>
+  <div id="file-tree"></div>
+</div>
+<button id="btn-toggle-sidebar" onclick="toggleSidebar()">☰ Files</button>
+<input type="file" id="folder-input" webkitdirectory multiple style="display:none" onchange="handleFolder(this.files)">
+
+<div id="controls">
+  <button id="btn-load" onclick="document.getElementById('file-input').click()">Load JSON</button>
+  <input type="file" id="file-input" accept=".json" style="display:none" onchange="handleFile(this.files[0])">
+  <button onclick="document.getElementById('folder-input').click()">Load Folder</button>
+  <button id="btn-play" onclick="togglePlay()">▶ Play</button>
+  <label>Frame:</label>
+  <input type="range" id="frame-slider" min="0" max="0" value="0" oninput="goToFrame(this.value)">
+  <span id="frame-counter">0 / 0</span>
+  <label>Speed:</label>
+  <input type="range" id="speed-slider" min="1" max="3" value="3" step="1" oninput="updateSpeed(this.value)">
+  <span id="speed-label">60 fps</span>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── Skeleton definition ──────────────────────────────────────────
+const JOINT_NAMES = {
+  0:"Hips",1:"L_Hip",2:"R_Hip",3:"L_Knee",4:"R_Knee",5:"L_Ankle",6:"R_Ankle",
+  7:"Spine",8:"Chest",9:"Neck",10:"Head",11:"L_Shoulder",12:"R_Shoulder",
+  13:"L_UpperArm",14:"R_UpperArm",15:"L_LowerArm",16:"R_LowerArm",
+  17:"L_Hand",18:"R_Hand",19:"L_Toes",20:"R_Toes",24:"HipsCenter",
+  54:"Chest2"
+};
+
+// Left fingers: 25-38, Right fingers: 39-53
+const LEFT_FINGERS =  [25,26,27,28,29,30,31,32,33,34,35,36,37,38];
+const RIGHT_FINGERS = [39,40,41,42,43,44,45,46,47,48,49,50,51,52,53];
+
+const BONES = [
+  [0,7],[7,8],[8,9],[9,10],          // spine → head
+  [0,1],[1,3],[3,5],[5,19],          // left leg
+  [0,2],[2,4],[4,6],[6,20],          // right leg
+  [8,11],[11,13],[13,15],[15,17],    // left arm
+  [8,12],[12,14],[14,16],[16,18],    // right arm
+  // fingers → hand
+  ...[LEFT_FINGERS.map(k => [17, k])],
+  ...[RIGHT_FINGERS.map(k => [18, k])],
+];
+
+const JOINT_COLORS = {
+  head: 0xff7043, spine: 0x66bb6a, arms: 0x42a5f5, legs: 0xffa726, feet: 0xef5350, fingers: 0xffffff
+};
+
+function jointColor(k) {
+  if ([10,9].includes(k)) return JOINT_COLORS.head;
+  if ([7,8,0,24,54].includes(k)) return JOINT_COLORS.spine;
+  if ([11,12,13,14,15,16,17,18].includes(k)) return JOINT_COLORS.arms;
+  if ([1,2,3,4].includes(k)) return JOINT_COLORS.legs;
+  if ([5,6,19,20].includes(k)) return JOINT_COLORS.feet;
+  if (LEFT_FINGERS.includes(k) || RIGHT_FINGERS.includes(k)) return JOINT_COLORS.fingers;
+  return 0xffffff;
+}
+
+function jointRadius(k) {
+  if (LEFT_FINGERS.includes(k) || RIGHT_FINGERS.includes(k)) return 0.012;  // tiny fingers
+  if ([17,18].includes(k)) return 0.022;  // hands — medium
+  return 0.035;  // body joints — larger
+}
+
+function boneRadius(a, b) {
+  if (LEFT_FINGERS.includes(a) || LEFT_FINGERS.includes(b) ||
+      RIGHT_FINGERS.includes(a) || RIGHT_FINGERS.includes(b)) return 0.008;  // thin finger bones
+  return 0.025;  // body bones
+}
+
+// ── Three.js setup ───────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+scene.fog = new THREE.Fog(0x1a1a2e, 5, 20);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 50);
+camera.position.set(2, 2.5, 4);
+camera.lookAt(0, 1.2, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+document.getElementById('container').appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1.2, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.update();
+
+// Lighting
+scene.add(new THREE.AmbientLight(0x404060, 2));
+const key = new THREE.DirectionalLight(0xffffff, 3);
+key.position.set(5, 8, 5);
+key.castShadow = true;
+scene.add(key);
+const fill = new THREE.DirectionalLight(0x8090c0, 1.5);
+fill.position.set(-3, 2, -3);
+scene.add(fill);
+
+// Floor grid
+const grid = new THREE.GridHelper(40, 40, 0x444466, 0x222244);
+scene.add(grid);
+
+// Origin axis — red=X, green=Y, blue=Z, 1.5m long
+const axisHelper = new THREE.AxesHelper(1.5);
+scene.add(axisHelper);
+
+// Floor plane — created on load, repositioned to ground level
+const floorGeo = new THREE.PlaneGeometry(40, 40);
+const floorMat = new THREE.MeshStandardMaterial({
+  color: 0x4488aa, roughness: 0.6, metalness: 0.1,
+  transparent: true, opacity: 0.35, side: THREE.DoubleSide
+});
+const floorPlane = new THREE.Mesh(floorGeo, floorMat);
+floorPlane.rotation.x = -Math.PI / 2;  // horizontal
+floorPlane.visible = false;
+scene.add(floorPlane);
+
+// Floor height marker line
+const floorLineMat = new THREE.LineBasicMaterial({ color: 0x44aacc, transparent: true, opacity: 0.6 });
+const floorLineGeo = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(-20, 0, 0), new THREE.Vector3(20, 0, 0)
+]);
+const floorLine = new THREE.Line(floorLineGeo, floorLineMat);
+floorLine.visible = false;
+scene.add(floorLine);
+
+// Distance line from origin to skeleton centroid
+const distLineMat = new THREE.LineBasicMaterial({ color: 0xffdd44, linewidth: 2, transparent: true, opacity: 0.8 });
+const distLineGeo = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0)
+]);
+const distLine = new THREE.Line(distLineGeo, distLineMat);
+distLine.visible = false;
+scene.add(distLine);
+
+// ── Skeleton objects ─────────────────────────────────────────────
+const jointMeshes = [];
+const boneLines = [];
+const jointGroup = new THREE.Group();
+const boneGroup = new THREE.Group();
+scene.add(jointGroup);
+scene.add(boneGroup);
+
+const jointGeos = {};  // cache by radius
+function getJointGeo(r) {
+  const key = r.toFixed(3);
+  if (!jointGeos[key]) jointGeos[key] = new THREE.SphereGeometry(r, 16, 16);
+  return jointGeos[key];
+}
+
+const boneMat = new THREE.MeshStandardMaterial({ color: 0xbbccee, roughness: 0.4, metalness: 0.1 });
+
+function createSkeleton() {
+  while(jointGroup.children.length) jointGroup.remove(jointGroup.children[0]);
+  while(boneGroup.children.length) boneGroup.remove(boneGroup.children[0]);
+  jointMeshes.length = 0;
+  boneLines.length = 0;
+
+  for (let i = 0; i < 60; i++) {
+    const r = jointRadius(i);
+    const mat = new THREE.MeshStandardMaterial({ color: jointColor(i), roughness: 0.2, metalness: 0.1 });
+    const mesh = new THREE.Mesh(getJointGeo(r), mat);
+    mesh.visible = false;
+    mesh.castShadow = true;
+    jointGroup.add(mesh);
+    jointMeshes.push(mesh);
+  }
+
+  for (const [a, b] of BONES) {
+    const group = new THREE.Group();
+    boneGroup.add(group);
+    boneLines.push({ group, a, b });
+  }
+}
+
+function makeBone(pa, pb, r) {
+  const dir = new THREE.Vector3().subVectors(pb, pa);
+  const len = dir.length();
+  if (len < 0.001) return new THREE.Group();
+  const mid = new THREE.Vector3().addVectors(pa, pb).multiplyScalar(0.5);
+  const cylGeo = new THREE.CylinderGeometry(r, r, len, 8, 1);
+  const mesh = new THREE.Mesh(cylGeo, boneMat);
+  mesh.position.copy(mid);
+  const axis = new THREE.Vector3(0, 1, 0);
+  const quat = new THREE.Quaternion().setFromUnitVectors(axis, dir.normalize());
+  mesh.setRotationFromQuaternion(quat);
+  mesh.castShadow = true;
+  return mesh;
+}
+
+createSkeleton();
+
+// ── Data state ───────────────────────────────────────────────────
+let bodyframes = [];
+let currentFrame = 0;
+let playing = false;
+let playTimer = null;
+let fps = 60;
+
+function parseJSON(text) {
+  // Handle MongoDB extended JSON
+  text = text.replace(/ISODate\("(.+?)"\)/g, '"$1"');
+  text = text.replace(/ObjectId\("(.+?)"\)/g, '"$1"');
+  text = text.replace(/\bNaN\b/g, 'null');
+  return JSON.parse(text);
+}
+
+function extractPositions(bf) {
+  const positions = {};
+  const entries = bf.bodyFrameHumanPos || bf.bodyFrameHumanPos || [];
+  for (const entry of entries) {
+    positions[entry.k] = entry.v;  // [x, y, z]
+  }
+  return positions;
+}
+
+function updateSkeleton(frameIdx) {
+  if (!bodyframes.length) return;
+  const bf = bodyframes[Math.min(frameIdx, bodyframes.length - 1)];
+  const pos = extractPositions(bf);
+
+  // Use raw positions — center view on skeleton centroid instead of offsetting
+  // Update joints
+  for (const k in pos) {
+    const p = pos[k];
+    const mesh = jointMeshes[parseInt(k)];
+    if (mesh) {
+      mesh.position.set(p[0], p[1], p[2]);
+      mesh.visible = true;
+    }
+  }
+  for (let i = 0; i < jointMeshes.length; i++) {
+    if (!(i in pos)) jointMeshes[i].visible = false;
+  }
+
+  // Update bones — use cylinder meshes with per-bone radius
+  for (const { group, a, b } of boneLines) {
+    while(group.children.length) group.remove(group.children[0]);
+    if (a in pos && b in pos) {
+      const pa = new THREE.Vector3(pos[a][0], pos[a][1], pos[a][2]);
+      const pb = new THREE.Vector3(pos[b][0], pos[b][1], pos[b][2]);
+      group.add(makeBone(pa, pb, boneRadius(a, b)));
+    }
+  }
+
+  // Compute centroid, height, and distance from origin
+  const pts = Object.values(pos);
+  if (pts.length) {
+    const cx = pts.reduce((s,p)=>s+p[0],0)/pts.length;
+    const cy = pts.reduce((s,p)=>s+p[1],0)/pts.length;
+    const cz = pts.reduce((s,p)=>s+p[2],0)/pts.length;
+    const dist = Math.sqrt(cx*cx + cy*cy + cz*cz).toFixed(2);
+    const minY = Math.min(...pts.map(p=>p[1]));
+    const maxY = Math.max(...pts.map(p=>p[1]));
+    const height = (maxY - minY).toFixed(2);
+    document.getElementById('pos-label').innerHTML =
+      `Centroid: (${cx.toFixed(2)}, ${cy.toFixed(2)}, ${cz.toFixed(2)}) &nbsp;|&nbsp; <b style="color:#ffdd44">↕ ${dist}m from origin</b>`;
+    document.getElementById('height-label').textContent = `Skeleton height: ${height}m`;
+    // Update distance line
+    distLine.geometry.dispose();
+    distLine.geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(cx, cy, cz)
+    ]);
+    distLine.visible = true;
+  }
+}
+
+function fitViewToSkeleton() {
+  if (!bodyframes.length) return;
+  const bf = bodyframes[currentFrame];
+  const pos = extractPositions(bf);
+  const pts = Object.values(pos);
+  if (!pts.length) return;
+  const cx = pts.reduce((s,p)=>s+p[0],0)/pts.length;
+  const cy = pts.reduce((s,p)=>s+p[1],0)/pts.length;
+  const cz = pts.reduce((s,p)=>s+p[2],0)/pts.length;
+  controls.target.set(cx, cy, cz);
+  const dist = 2.5;
+  camera.position.set(cx + dist, cy + 2, cz + dist);
+  controls.update();
+}
+
+function goToFrame(idx) {
+  currentFrame = parseInt(idx);
+  updateSkeleton(currentFrame);
+  document.getElementById('frame-slider').value = currentFrame;
+  document.getElementById('frame-counter').textContent =
+    `${currentFrame + 1} / ${bodyframes.length}`;
+}
+
+window.goToFrame = goToFrame;
+
+function togglePlay() {
+  playing = !playing;
+  const btn = document.getElementById('btn-play');
+  btn.textContent = playing ? '⏸ Pause' : '▶ Play';
+  if (playing) {
+    playTimer = setInterval(() => {
+      const nxt = (currentFrame + 1) % bodyframes.length;
+      goToFrame(nxt);
+    }, 1000 / fps);
+  } else {
+    clearInterval(playTimer);
+  }
+}
+
+function updateSpeed(val) {
+  const speeds = [0, 10, 30, 60];  // index 1→10fps, 2→30fps, 3→60fps
+  fps = speeds[parseInt(val)];
+  document.getElementById('speed-label').textContent = fps + ' fps';
+  if (playing) {
+    clearInterval(playTimer);
+    playTimer = setInterval(() => {
+      const nxt = (currentFrame + 1) % bodyframes.length;
+      goToFrame(nxt);
+    }, 1000 / fps);
+  }
+}
+
+// ── File loading ─────────────────────────────────────────────────
+function loadData(data) {
+  bodyframes = data.bodyFrames || [];
+  if (!bodyframes.length) {
+    alert('No bodyFrames found in this JSON.');
+    return;
+  }
+  playing && togglePlay();
+  currentFrame = 0;
+
+  // Find floor level: lowest Y of any foot joint across all frames
+  let floorY = Infinity;
+  const footKs = [5, 6, 19, 20];
+  for (const bf of bodyframes) {
+    for (const entry of (bf.bodyFrameHumanPos || [])) {
+      if (footKs.includes(entry.k) && entry.v[1] < floorY) {
+        floorY = entry.v[1];
+      }
+    }
+  }
+  // Round down slightly for a clean number
+  floorY = Math.floor(floorY * 100) / 100;
+  floorPlane.position.y = floorY;
+  floorPlane.visible = true;
+  floorLine.position.y = floorY;
+  floorLine.visible = true;
+  // Update floor label
+  document.getElementById('floor-label').textContent = `Floor: y = ${floorY.toFixed(2)}m`;
+  document.getElementById('floor-label').style.display = 'block';
+
+  updateSkeleton(0);
+  document.getElementById('frame-slider').max = bodyframes.length - 1;
+  document.getElementById('frame-slider').value = 0;
+  document.getElementById('frame-counter').textContent = `1 / ${bodyframes.length}`;
+  fitViewToSkeleton();
+
+  // Show class info
+  const bat = data.bat || {};
+  const labels = [];
+  for (const [k,v] of Object.entries(bat)) {
+    if (v === 1 && ['D','FT','HN','H','M','L','ST','T','RV','SP','LB','UB','SL','DL','SY','AS','A','G',
+                     'F','E','LF','SR','HG','U','S','LG','AR','TR','UL','LL','K','UA','EL','LA','FR',
+                     'BK','UF','LN','SH','UC','LK'].includes(k)) labels.push(k);
+  }
+  const cg = bat['CG_FloorSupport'] ?? bat['CG_Spine'] ?? '';
+  document.getElementById('class-label').textContent =
+    `Active flags: ${labels.join(', ') || 'none'}  |  CG: ${cg}`;
+}
+
+function handleFile(file) {
+  if (!file) return;
+  document.getElementById('file-name').textContent = file.webkitRelativePath || file.name;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = parseJSON(e.target.result);
+      loadData(data);
+    } catch (err) {
+      alert('Failed to parse JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ── Folder loading ────────────────────────────────────────────────
+let fileList = [];
+let currentFileIndex = -1;
+
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  sb.classList.toggle('open');
+  // Shift info/instructions/controls when sidebar is open
+  const offset = sb.classList.contains('open') ? '270px' : '16px';
+  document.getElementById('info').style.left = offset;
+  document.getElementById('instructions').style.right = '16px';
+  document.getElementById('controls').style.left = sb.classList.contains('open') ? '270px' : '0';
+}
+
+let _pendingFolderFiles = null;
+
+function handleFolder(files) {
+  // Build file list — only .json files
+  _pendingFolderFiles = [];
+  let totalBytes = 0;
+  for (const f of files) {
+    if (f.name.endsWith('.json')) {
+      _pendingFolderFiles.push(f);
+      totalBytes += f.size;
+    }
+  }
+  if (!_pendingFolderFiles.length) { alert('No JSON files found in folder.'); return; }
+
+  // Show custom modal with size
+  const sizeMB = (totalBytes / (1024 * 1024)).toFixed(1);
+  const sizeStr = totalBytes > 1e9 ? `${(totalBytes/1e9).toFixed(2)} GB`
+    : totalBytes > 1e6 ? `${sizeMB} MB`
+    : `${(totalBytes/1024).toFixed(0)} KB`;
+  document.getElementById('modal-msg').innerHTML =
+    `<span class="size">${_pendingFolderFiles.length} JSON files</span><br>Total size: <span class="size">${sizeStr}</span><br><br>Loading may take a moment for large folders.`;
+  document.getElementById('modal-overlay').classList.add('show');
+}
+
+// Modal buttons
+document.getElementById('modal-ok').onclick = () => {
+  document.getElementById('modal-overlay').classList.remove('show');
+  if (!_pendingFolderFiles) return;
+  loadFolderFiles(_pendingFolderFiles);
+  _pendingFolderFiles = null;
+};
+document.getElementById('modal-cancel').onclick = () => {
+  document.getElementById('modal-overlay').classList.remove('show');
+  _pendingFolderFiles = null;
+};
+
+function loadFolderFiles(files) {
+  fileList = files;
+  const totalBytes = files.reduce((s, f) => s + f.size, 0);
+  const sizeMB = (totalBytes / (1024 * 1024)).toFixed(1);
+  const sizeStr = totalBytes > 1e9 ? `${(totalBytes/1e9).toFixed(2)} GB`
+    : totalBytes > 1e6 ? `${sizeMB} MB`
+    : `${(totalBytes/1024).toFixed(0)} KB`;
+
+  // Build tree structure
+  const tree = {};
+  for (const f of fileList) {
+    const parts = (f.webkitRelativePath || f.name).split('/');
+    let node = tree;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!node[parts[i]]) node[parts[i]] = { _children: {} };
+      node = node[parts[i]]._children;
+    }
+    node[parts[parts.length - 1]] = { _file: f, _index: fileList.indexOf(f) };
+  }
+
+  document.getElementById('sidebar-title').textContent = `${fileList.length} JSONs — ${sizeStr}`;
+  document.getElementById('sidebar').classList.add('open');
+  if (!document.getElementById('sidebar').classList.contains('open')) {
+    toggleSidebar();
+  }
+
+  renderTree(tree, document.getElementById('file-tree'), '');
+
+  // Auto-load first file
+  if (fileList.length > 0) {
+    loadFileByIndex(0);
+  }
+}
+
+function renderTree(node, parent, prefix) {
+  parent.innerHTML = '';
+  const keys = Object.keys(node).sort();
+  // Folders first, then files
+  const folders = keys.filter(k => node[k]._children);
+  const files = keys.filter(k => node[k]._file);
+
+  for (const name of folders) {
+    const div = document.createElement('div');
+    div.className = 'tree-item folder';
+    div.textContent = '📁 ' + name;
+    parent.appendChild(div);
+    const childDiv = document.createElement('div');
+    childDiv.style.paddingLeft = '12px';
+    parent.appendChild(childDiv);
+    renderTree(node[name]._children, childDiv, prefix + '  ');
+  }
+
+  for (const name of files) {
+    const div = document.createElement('div');
+    div.className = 'tree-item';
+    div.textContent = '📄 ' + name;
+    div.dataset.index = node[name]._index;
+    div.onclick = () => loadFileByIndex(parseInt(div.dataset.index));
+    parent.appendChild(div);
+  }
+}
+
+function loadFileByIndex(idx) {
+  if (idx < 0 || idx >= fileList.length) return;
+  currentFileIndex = idx;
+  // Highlight active
+  document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('active'));
+  const el = document.querySelector(`.tree-item[data-index="${idx}"]`);
+  if (el) { el.classList.add('active'); el.scrollIntoView({ block: 'nearest' }); }
+  handleFile(fileList[idx]);
+}
+
+// Keyboard: prev/next file with PageUp/PageDown
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'PageDown' || e.key === 'PageUp') {
+    e.preventDefault();
+    const dir = e.key === 'PageDown' ? 1 : -1;
+    if (fileList.length) loadFileByIndex(currentFileIndex + dir);
+  }
+});
+
+// ── Drag & drop ──────────────────────────────────────────────────
+const dropzone = document.getElementById('dropzone');
+document.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('active'); });
+document.addEventListener('dragleave', () => dropzone.classList.remove('active'));
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  dropzone.classList.remove('active');
+  const file = e.dataTransfer.files[0];
+  if (file && file.name.endsWith('.json')) handleFile(file);
+});
+
+// ── Keyboard controls ────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  switch(e.key) {
+    case ' ': e.preventDefault(); togglePlay(); break;
+    case 'ArrowLeft': goToFrame(currentFrame - 1); break;
+    case 'ArrowRight': goToFrame(currentFrame + 1); break;
+    case 'r': fitViewToSkeleton(); break;
+    case 'f': fitViewToSkeleton(); break;
+  }
+});
+
+// ── Render loop ──────────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── Resize ───────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ── Expose to global scope ───────────────────────────────────────
+window.goToFrame = goToFrame;
+window.togglePlay = togglePlay;
+window.updateSpeed = updateSpeed;
+window.handleFile = handleFile;
+window.handleFolder = handleFolder;
+window.toggleSidebar = toggleSidebar;
+window.fitViewToSkeleton = fitViewToSkeleton;
+</script>
+</body>
+</html>

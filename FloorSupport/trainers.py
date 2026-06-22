@@ -1,63 +1,65 @@
-import ast
-import csv
+import json
+import re
+import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 
-def load_feature_vector_from_csv(csv_path: str | Path) -> List[float]:
-    """Convert a single bodyframe CSV file into a flat numeric feature vector."""
-    path = Path(csv_path)
-    with path.open("r", newline="", encoding="utf-8") as f:
-        rows = list(csv.reader(f))
+def _preprocess_json(text: str) -> str:
+    """Handle MongoDB extended JSON: ISODate(), NaN, ObjectId()."""
+    text = re.sub(r'ISODate\("(.+?)"\)', r'"\1"', text)
+    text = re.sub(r'ObjectId\("(.+?)"\)', r'"\1"', text)
+    text = text.replace("NaN", "null")
+    return text
 
-    if len(rows) < 2:
-        return []
 
-    cells = [cell.strip() for cell in rows[1] if cell and cell.strip()]
-    if not cells:
-        return []
-
-    def extract_values(value):
-        values = []
-        try:
-            parsed = ast.literal_eval(value)
-        except (ValueError, SyntaxError):
-            parsed = value
-
-        if isinstance(parsed, list):
-            for item in parsed:
-                if isinstance(item, dict) and "v" in item:
-                    values.extend(float(x) for x in item["v"])
-                elif isinstance(item, (int, float)):
-                    values.append(float(item))
-        elif isinstance(parsed, dict):
-            if "v" in parsed:
-                values.extend(float(x) for x in parsed["v"])
-        elif isinstance(parsed, (int, float)):
-            values.append(float(parsed))
-        elif isinstance(parsed, str):
-            try:
-                values.append(float(parsed))
-            except (TypeError, ValueError):
-                if "v" in parsed:
-                    import re
-                    nums = [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", parsed)]
-                    values.extend(nums)
-        return values
-
-    combined_values = []
-    if len(cells) > 1:
-        combined_text = " ".join(cells)
-        combined_values = extract_values(combined_text)
-
-    if combined_values:
-        return combined_values
-
+def _extract_sorted_values(entries: list) -> List[float]:
+    """Extract v-values from a list of {k, v} dicts, sorted by k for consistency."""
     values = []
-    for cell in cells:
-        values.extend(extract_values(cell))
-
+    for entry in sorted(entries, key=lambda x: x.get("k", 0)):
+        v = entry.get("v", [])
+        values.extend(float(x) for x in v)
     return values
+
+
+def load_feature_vectors_from_json(json_path: Union[str, Path]) -> List[List[float]]:
+    """Convert a single JSON recording into a list of flat numeric feature vectors,
+    one per bodyframe."""
+    path = Path(json_path)
+    text = path.read_text(encoding="utf-8")
+    text = _preprocess_json(text)
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        print(f"Warning: could not parse JSON: {path}")
+        return []
+
+    bodyframes = data.get("bodyFrames", [])
+    all_features = []
+
+    for bf in bodyframes:
+        features = []
+        # Skeletal pose fields — same as the old CSV columns
+        for key in ["bodyFrameHuman", "bodyFrameHumanHeading", "bodyFrameHumanPos"]:
+            entries = bf.get(key, [])
+            if entries:
+                features.extend(_extract_sorted_values(entries))
+
+        # Flat quaternion
+        root_rot = bf.get("initialRootRotation", [])
+        if isinstance(root_rot, list):
+            features.extend(float(x) for x in root_rot)
+
+        # Per-joint initial rotations
+        init_rots = bf.get("initialRotations", [])
+        if init_rots:
+            features.extend(_extract_sorted_values(init_rots))
+
+        if features:
+            all_features.append(features)
+
+    return all_features
 
 
 class Trainer:
@@ -73,23 +75,42 @@ class Trainer:
         if not split_dir.exists():
             return samples
 
+        json_files = []
         for class_dir in sorted(split_dir.iterdir()):
             if not class_dir.is_dir():
                 continue
             label = self._class_to_index(class_dir.name)
-            for csv_path in sorted(class_dir.glob("*.csv")):
-                features = load_feature_vector_from_csv(csv_path)
+            for json_path in sorted(class_dir.glob("*.json")):
+                json_files.append((json_path, label))
+
+        total = len(json_files)
+        for i, (json_path, label) in enumerate(json_files):
+            pct = (i + 1) / total * 100
+            bar_width = 20
+            filled = int(bar_width * (i + 1) / total)
+            bar = "█" * filled + "░" * (bar_width - filled)
+            print(
+                f"\r  Loading {split_name}  {bar}  {pct:3.0f}%  ({i+1}/{total})",
+                end="", flush=True,
+            )
+            feature_vectors = load_feature_vectors_from_json(json_path)
+            for features in feature_vectors:
                 if features:
                     samples.append((features, label))
+        print()  # newline after loading bar
         return samples
 
     def _class_to_index(self, class_name: str) -> int:
-        mapping = {
-            "d_ft_dual_feet": 0,
-            "d_hn_dual_hand": 1,
-            "s_ft_single_feet": 2,
-        }
-        return mapping.get(class_name, -1)
+        # Lazy-build mapping from the directory names (sorted = stable order)
+        if not hasattr(self, "_class_map"):
+            self._class_map = {}
+            for split in ["train", "val", "test"]:
+                split_dir = self.data_dir / split
+                if split_dir.exists():
+                    for d in sorted(split_dir.iterdir()):
+                        if d.is_dir() and d.name not in self._class_map:
+                            self._class_map[d.name] = len(self._class_map)
+        return self._class_map.get(class_name, -1)
 
     def _compute_metrics(self, features_and_labels):
         if not features_and_labels:
@@ -119,15 +140,29 @@ class Trainer:
         filled = max(0, min(width, filled))
         return "[" + "#" * filled + "." * (width - filled) + "]"
 
-    def _format_progress(self, epoch: int, total_epochs: int) -> str:
-        completed = epoch + 1
-        width = 30
-        filled = int(round((completed / total_epochs) * width)) if total_epochs else width
-        filled = max(0, min(width, filled))
-        return "[" + "#" * filled + "." * (width - filled) + "]"
+    @staticmethod
+    def _sparkline(values, width=30, reverse=False):
+        """Draw a min-max scaled sparkline of a list of values."""
+        if len(values) < 2:
+            return ""
+        mn, mx = min(values), max(values)
+        if mx == mn:
+            return "─" * min(width, len(values))
+        chars = "▁▂▃▄▅▆▇█"
+        if reverse:
+            values = [-v for v in values]
+            mn, mx = -mx, -mn
+        line = ""
+        step = max(1, len(values) // width)
+        for i in range(0, len(values), step):
+            idx = min(len(values) - 1, i)
+            v = (values[idx] - mn) / (mx - mn)
+            line += chars[min(len(chars) - 1, int(v * len(chars)))]
+        return line
 
     def run(self):
-        print(f"Training started with model={self.model.__class__.__name__}")
+        model_name = self.model.__class__.__name__
+        print(f"Training started with model={model_name}")
         print(f"Data directory: {self.data_dir}")
         print(f"Epochs: {self.epochs}, batch size: {self.batch_size}")
 
@@ -139,17 +174,185 @@ class Trainer:
             print("No training data found. Please check the dataset directory structure.")
             return
 
-        self.model.train(train_data, val_data)
+        # Setup checkpoint directory
+        model_name = getattr(self.model, "name", "model")
+        model_lr = getattr(self.model, "lr", 0.0)
+        ckpt_dir = Path("checkpoints") / model_name
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-        print("\n=== Training progress ===")
+        best_val_acc = 0.0
+        history = []
+
+        print(f"\n{'Epoch':>6s} {'Time':>7s}  {'tr_loss':>7s}  {'tr_acc':>6s}  "
+              f"{'val_loss':>7s}  {'val_acc':>6s}  loss trend")
+        print("─" * 78)
+
         for epoch in range(self.epochs):
-            train_loss, train_acc = self._compute_metrics(train_data)
-            val_loss, val_acc = self._compute_metrics(val_data)
-            print(f"\nEpoch {epoch + 1}/{self.epochs}")
-            print(f"overall: {self._format_progress(epoch, self.epochs)}")
-            print(f"train loss: {train_loss:.4f} {self._format_bar(train_loss, invert=True)}")
-            print(f"train acc : {train_acc:.4f} {self._format_bar(train_acc)}")
-            print(f"val loss  : {val_loss:.4f} {self._format_bar(val_loss, invert=True)}")
-            print(f"val acc   : {val_acc:.4f} {self._format_bar(val_acc)}")
+            t_start = time.time()
 
-        print("\nTraining finished")
+            try:
+                result = self.model.train(train_data, val_data,
+                                          epoch=epoch + 1, total_epochs=self.epochs)
+            except TypeError:
+                result = self.model.train(train_data, val_data)
+
+            elapsed = time.time() - t_start
+
+            if isinstance(result, dict):
+                train_loss = result.get("train_loss", 0.0)
+                train_acc = result.get("train_acc", 0.0)
+                val_loss = result.get("val_loss", 0.0)
+                val_acc = result.get("val_acc", 0.0)
+
+                # Only save best model — delete previous best, keep only one
+                if hasattr(self.model, "save") and val_acc > best_val_acc:
+                    # Remove old best
+                    for old in ckpt_dir.glob(f"{model_name}_ep*.pt"):
+                        old.unlink()
+                    best_val_acc = val_acc
+                    ckpt_name = f"{model_name}_ep{self.epochs}_lr{model_lr}_acc{val_acc:.3f}.pt"
+                    self.model.save(str(ckpt_dir / ckpt_name))
+            else:
+                train_loss, train_acc = self._compute_metrics(train_data)
+                val_loss, val_acc = self._compute_metrics(val_data)
+
+            history.append(train_loss)
+
+            if elapsed < 60:
+                time_str = f"{elapsed:.0f}s"
+            else:
+                time_str = f"{elapsed/60:.0f}m{elapsed%60:.0f}s"
+
+            marker = " ★" if val_acc == best_val_acc and val_acc > 0 else "  "
+            spark = self._sparkline(history)
+            print(f"{epoch+1:4d}/{self.epochs:<3d} {time_str:>7s}  "
+                  f"{train_loss:7.4f}  {train_acc:6.1%}  "
+                  f"{val_loss:7.4f}  {val_acc:6.1%}{marker}  {spark}")
+
+        print("─" * 78)
+        print(f"Training finished  |  best val acc: {best_val_acc:.4f}")
+        print(f"Checkpoint saved: {ckpt_dir.resolve()}")
+
+
+class GestureTrainer(Trainer):
+    """Trainer that treats each JSON file as one gesture sample.
+
+    Unlike the base Trainer which flattens every bodyframe into an independent
+    sample, this keeps all bodyframes from one recording together.  The model
+    receives a variable-length sequence that gets uniformly sampled to a fixed
+    number of frames (handled inside the model).
+    """
+
+    def _load_gestures(self, split_name: str) -> List[Tuple[List[List[float]], int]]:
+        """Return one entry per JSON: (list_of_feature_vectors, label)."""
+        split_dir = self.data_dir / split_name
+        gestures = []
+        if not split_dir.exists():
+            return gestures
+
+        json_files = []
+        for class_dir in sorted(split_dir.iterdir()):
+            if not class_dir.is_dir():
+                continue
+            label = self._class_to_index(class_dir.name)
+            for json_path in sorted(class_dir.glob("*.json")):
+                json_files.append((json_path, label))
+
+        total = len(json_files)
+        for i, (json_path, label) in enumerate(json_files):
+            pct = (i + 1) / total * 100
+            bar_width = 20
+            filled = int(bar_width * (i + 1) / total)
+            bar = "█" * filled + "░" * (bar_width - filled)
+            print(
+                f"\r  Loading {split_name}  {bar}  {pct:3.0f}%  ({i+1}/{total})",
+                end="", flush=True,
+            )
+            feature_vectors = load_feature_vectors_from_json(json_path)
+            if feature_vectors:
+                gestures.append((feature_vectors, label))
+        print()
+        return gestures
+
+    def _compute_metrics_gesture(self, gestures_and_labels):
+        """Compute metrics on gesture-level data using the model's predict."""
+        if not gestures_and_labels:
+            return 0.0, 0.0
+        predictions = self.model.predict(gestures_and_labels)
+        true_labels = [label for _, label in gestures_and_labels]
+        correct = sum(int(p == l) for p, l in zip(predictions, true_labels))
+        accuracy = correct / len(true_labels) if true_labels else 0.0
+        loss = sum(abs(p - l) for p, l in zip(predictions, true_labels)) / len(true_labels)
+        return loss, accuracy
+
+    def run(self):
+        model_name = self.model.__class__.__name__
+        print(f"Training started with model={model_name}  [gesture-level: 1 JSON = 1 sample]")
+        print(f"Data directory: {self.data_dir}")
+        print(f"Epochs: {self.epochs}, batch size: {self.batch_size}")
+
+        train_gestures = self._load_gestures("train")
+        val_gestures = self._load_gestures("val")
+
+        print(f"Loaded {len(train_gestures)} training gestures and {len(val_gestures)} validation gestures")
+        if not train_gestures:
+            print("No training data found. Please check the dataset directory structure.")
+            return
+
+        model_name = getattr(self.model, "name", "model")
+        model_lr = getattr(self.model, "lr", 0.0)
+        ckpt_dir = Path("checkpoints") / model_name
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+        best_val_acc = 0.0
+        history = []
+
+        print(f"\n{'Epoch':>6s} {'Time':>7s}  {'tr_loss':>7s}  {'tr_acc':>6s}  "
+              f"{'val_loss':>7s}  {'val_acc':>6s}  loss trend")
+        print("─" * 78)
+
+        for epoch in range(self.epochs):
+            t_start = time.time()
+
+            try:
+                result = self.model.train(train_gestures, val_gestures,
+                                          epoch=epoch + 1, total_epochs=self.epochs)
+            except TypeError:
+                result = self.model.train(train_gestures, val_gestures)
+
+            elapsed = time.time() - t_start
+
+            if isinstance(result, dict):
+                train_loss = result.get("train_loss", 0.0)
+                train_acc = result.get("train_acc", 0.0)
+                val_loss = result.get("val_loss", 0.0)
+                val_acc = result.get("val_acc", 0.0)
+
+                # Only save best model — delete previous best, keep only one
+                if hasattr(self.model, "save") and val_acc > best_val_acc:
+                    # Remove old best
+                    for old in ckpt_dir.glob(f"{model_name}_ep*.pt"):
+                        old.unlink()
+                    best_val_acc = val_acc
+                    ckpt_name = f"{model_name}_ep{self.epochs}_lr{model_lr}_acc{val_acc:.3f}.pt"
+                    self.model.save(str(ckpt_dir / ckpt_name))
+            else:
+                train_loss, train_acc = self._compute_metrics_gesture(train_gestures)
+                val_loss, val_acc = self._compute_metrics_gesture(val_gestures)
+
+            history.append(train_loss)
+
+            if elapsed < 60:
+                time_str = f"{elapsed:.0f}s"
+            else:
+                time_str = f"{elapsed/60:.0f}m{elapsed%60:.0f}s"
+
+            marker = " ★" if val_acc == best_val_acc and val_acc > 0 else "  "
+            spark = self._sparkline(history)
+            print(f"{epoch+1:4d}/{self.epochs:<3d} {time_str:>7s}  "
+                  f"{train_loss:7.4f}  {train_acc:6.1%}  "
+                  f"{val_loss:7.4f}  {val_acc:6.1%}{marker}  {spark}")
+
+        print("─" * 78)
+        print(f"Training finished  |  best val acc: {best_val_acc:.4f}")
+        print(f"Checkpoints saved in: {ckpt_dir.resolve()}")

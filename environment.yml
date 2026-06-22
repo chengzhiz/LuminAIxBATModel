@@ -1,0 +1,13 @@
+name: batmodel
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch>=2.0
+  - numpy
+  - pip
+  - pip:
+    - pytest
+    - tqdm
