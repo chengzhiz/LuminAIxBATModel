@@ -1,4 +1,4 @@
-"""Training entry point for LimbExpression — 8-code multi-label classification."""
+"""Training entry point for Space — multi-label (5-code) classification."""
 import argparse
 import sys
 from pathlib import Path
@@ -7,15 +7,15 @@ from pathlib import Path
 _here = Path(__file__).resolve().parent
 _floor = _here.parent / "FloorSupport"
 sys.path.insert(0, str(_here))
-sys.path.append(str(_floor))  # append, not prepend — keep LimbExpression first
+sys.path.append(str(_floor))  # append, not prepend — keep Space first
 
-from models.multilabel_cnn import MultiLabelCNN
-from trainers import LimbExpressionMultiLabelTrainer
+from models.multilabel_space import MultiLabelSpaceModel
+from trainers import SpaceMultiLabelTrainer
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train multi-label model for LimbExpression")
-    parser.add_argument("--data-dir", type=str, default="dataset/limb_expression_raw")
+    parser = argparse.ArgumentParser(description="Train multi-label model for Space data")
+    parser.add_argument("--data-dir", type=str, default="dataset/space_raw")
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--device", type=str, default="cpu",
@@ -29,8 +29,8 @@ def main():
     if not data_dir.is_absolute():
         data_dir = (Path(__file__).resolve().parent / data_dir).resolve()
 
-    model = MultiLabelCNN(num_heads=4, lr=args.lr, device=args.device)
-    trainer = LimbExpressionMultiLabelTrainer(
+    model = MultiLabelSpaceModel(num_codes=5, lr=args.lr, device=args.device)
+    trainer = SpaceMultiLabelTrainer(
         model=model, data_dir=data_dir,
         epochs=args.epochs, batch_size=16,
     )

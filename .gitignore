@@ -2,8 +2,17 @@
 **/dataset/
 !**/dataset/create_dataset_splits.py
 
-# Model checkpoints
+# Model checkpoints (PyTorch .pt)
 **/checkpoints/
+
+# Exported ONNX models (large binaries, deployed separately)
+*.onnx
+
+# BATRunner test output
+bat_result.csv
+
+# Loss plots
+*_loss.png
 
 # OS
 .DS_Store
@@ -19,3 +28,11 @@ __pycache__/
 
 # Notebook outputs
 *.ipynb_checkpoints/
+
+# Cloned Unity app (not part of the training repo)
+LuminAI-master/
+__bat/
+
+# Space directory — ignore subproject but track model code
+Space/dataset/
+Space/checkpoints/

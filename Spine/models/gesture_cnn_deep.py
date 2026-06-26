@@ -1,7 +1,7 @@
 """Deep residual 1D CNN for gesture classification  (~72.5% val acc)."""
 
 import torch.nn as nn
-from ._gesture_base import GestureModelBase
+from ._gesture_base import GestureModelBase, HeightNormalize
 
 
 class _ResBlock(nn.Module):
@@ -25,6 +25,7 @@ class _GestureCNNDeep(nn.Module):
     """Deeper CNN with residual blocks.  256 target frames."""
     def __init__(self, in_channels=732, num_classes=3, dropout=0.5):
         super().__init__()
+        self.normalize = HeightNormalize()
         self.stem = nn.Sequential(
             nn.Conv1d(in_channels, 128, 7, padding=3), nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
@@ -46,6 +47,7 @@ class _GestureCNNDeep(nn.Module):
         )
 
     def forward(self, x):
+        x = self.normalize(x)
         x = self.stem(x)
         x = self.stage1(x)
         x = self.stage2(x)

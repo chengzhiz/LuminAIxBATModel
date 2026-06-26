@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-from trainers import Trainer, GestureTrainer
+from trainers import Trainer, GestureTrainer, FloorSupportMultiLabelTrainer
 from models import get_model
 
 
@@ -11,7 +11,8 @@ def parse_args():
                         help="Path to the dataset root")
     parser.add_argument("--model", type=str, default="simple_classifier",
                         choices=["simple_classifier", "cnn1d_classifier", "gesture_cnn",
-                                 "gesture_cnn_v2", "gesture_lstm", "gesture_cnn_deep"],
+                                 "gesture_cnn_v2", "gesture_lstm", "gesture_cnn_deep",
+                                 "multilabel_floor"],
                         help="Model name")
     parser.add_argument("--epochs", type=int, default=30,
                         help="Number of training epochs")
@@ -36,6 +37,18 @@ def main():
     model_cls = get_model(args.model)
 
     gesture_models = {"gesture_cnn", "gesture_cnn_v2", "gesture_lstm", "gesture_cnn_deep"}
+    multilabel_models = {"multilabel_floor"}
+
+    if args.model in multilabel_models:
+        model = model_cls(lr=args.lr, device=args.device)
+        trainer = FloorSupportMultiLabelTrainer(
+            model=model,
+            data_dir=data_dir,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+        )
+        trainer.run()
+        return
 
     if args.model == "cnn1d_classifier" or args.model in gesture_models:
         model = model_cls(lr=args.lr, device=args.device)

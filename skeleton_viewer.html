@@ -118,6 +118,7 @@
   <b>Keyboard</b><br>
   &nbsp;&nbsp;<kbd>Space</kbd> play/pause<br>
   &nbsp;&nbsp;<kbd>←</kbd><kbd>→</kbd> frame back/forward<br>
+  &nbsp;&nbsp;<kbd>↑</kbd><kbd>↓</kbd> prev/next file<br>
   &nbsp;&nbsp;<kbd>F</kbd> fit view on skeleton<br>
   <br>
   <b>Scene legend</b><br>
@@ -542,6 +543,7 @@ function handleFile(file) {
 
 // ── Folder loading ────────────────────────────────────────────────
 let fileList = [];
+let flatFileOrder = [];  // sorted to match tree display order
 let currentFileIndex = -1;
 
 function toggleSidebar() {
@@ -610,13 +612,42 @@ function loadFolderFiles(files) {
     node[parts[parts.length - 1]] = { _file: f, _index: fileList.indexOf(f) };
   }
 
+  // Build flat sorted order matching tree display (depth-first, alphabetical)
+  flatFileOrder = [];
+  function collectFiles(node) {
+    const keys = Object.keys(node).sort();
+    const folders = keys.filter(k => node[k]._children);
+    const files = keys.filter(k => node[k]._file);
+    for (const name of folders) {
+      collectFiles(node[name]._children);
+    }
+    for (const name of files) {
+      flatFileOrder.push(node[name]._index);
+    }
+  }
+  collectFiles(tree);
+  // Re-index fileList to match this order
+  fileList = flatFileOrder.map(i => fileList[i]);
+  // Rebuild tree with corrected indices
+  const newTree = {};
+  for (let i = 0; i < fileList.length; i++) {
+    const f = fileList[i];
+    const parts = (f.webkitRelativePath || f.name).split('/');
+    let node = newTree;
+    for (let j = 0; j < parts.length - 1; j++) {
+      if (!node[parts[j]]) node[parts[j]] = { _children: {} };
+      node = node[parts[j]]._children;
+    }
+    node[parts[parts.length - 1]] = { _file: f, _index: i };
+  }
+
   document.getElementById('sidebar-title').textContent = `${fileList.length} JSONs — ${sizeStr}`;
   document.getElementById('sidebar').classList.add('open');
   if (!document.getElementById('sidebar').classList.contains('open')) {
     toggleSidebar();
   }
 
-  renderTree(tree, document.getElementById('file-tree'), '');
+  renderTree(newTree, document.getElementById('file-tree'), '');
 
   // Auto-load first file
   if (fileList.length > 0) {
@@ -653,7 +684,9 @@ function renderTree(node, parent, prefix) {
 }
 
 function loadFileByIndex(idx) {
-  if (idx < 0 || idx >= fileList.length) return;
+  if (!fileList.length) return;
+  // Wrap around
+  idx = ((idx % fileList.length) + fileList.length) % fileList.length;
   currentFileIndex = idx;
   // Highlight active
   document.querySelectorAll('.tree-item').forEach(el => el.classList.remove('active'));
@@ -665,9 +698,9 @@ function loadFileByIndex(idx) {
 // Keyboard: prev/next file with PageUp/PageDown
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
-  if (e.key === 'PageDown' || e.key === 'PageUp') {
+  if (e.key === 'PageDown' || e.key === 'PageUp' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
-    const dir = e.key === 'PageDown' ? 1 : -1;
+    const dir = (e.key === 'PageDown' || e.key === 'ArrowDown') ? 1 : -1;
     if (fileList.length) loadFileByIndex(currentFileIndex + dir);
   }
 });

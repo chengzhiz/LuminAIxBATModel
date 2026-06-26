@@ -6,49 +6,6 @@ import torch.nn as nn
 from typing import List
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Height normalization — baked into the model so raw features work
-# ═══════════════════════════════════════════════════════════════════
-
-class HeightNormalize(nn.Module):
-    """Normalize body positions to unit height — makes the model
-    height-invariant (adults, kids, all skeleton sizes).
-
-    Position layout (732-dim vector):
-        [0:208]   bodyFrameHuman      (52 joints × 4 quat)
-        [208:364] bodyFrameHumanHeading (52 joints × 3 heading)
-        [364:520] bodyFrameHumanPos   (52 joints × 3 position)  ← normalized
-        [520:524] initialRootRotation (4 quat)
-        [524:732] initialRotations    (52 joints × 4 quat)
-
-    The Y-coordinates are every 3rd value within [364:520]:
-        indices 365, 368, 371, ..., 518
-    """
-
-    def __init__(self):
-        super().__init__()
-        # Pre-compute indices for efficient access
-        pos_start, pos_end = 364, 520
-        self.register_buffer("pos_start", torch.tensor(pos_start, dtype=torch.long))
-        self.register_buffer("pos_end", torch.tensor(pos_end, dtype=torch.long))
-        # Y indices within the position block: every 3rd starting from 1
-        y_indices = torch.tensor([pos_start + 1 + i * 3 for i in range(52)], dtype=torch.long)
-        self.register_buffer("y_indices", y_indices)
-
-    def forward(self, x):
-        """x: (B, C, T) — normalize position channels by per-sample height."""
-        # Gather Y values from position block
-        y_vals = x[:, self.y_indices, :]                         # (B, 52, T)
-        y_min = y_vals.amin(dim=(1, 2), keepdim=True)           # (B, 1, 1)
-        y_max = y_vals.amax(dim=(1, 2), keepdim=True)
-        height = (y_max - y_min).clamp(min=0.001)                # avoid /0
-
-        # Divide position channels by height
-        x_norm = x.clone()
-        x_norm[:, self.pos_start:self.pos_end, :] /= height
-        return x_norm
-
-
 def sample_frames(features_list: List[List[float]], target_len: int) -> np.ndarray:
     """Uniformly sample *target_len* frames from a variable-length sequence."""
     T = len(features_list)

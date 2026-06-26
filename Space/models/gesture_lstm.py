@@ -1,7 +1,7 @@
 """Bidirectional LSTM for gesture classification  (~84.3% val acc)."""
 
 import torch.nn as nn
-from ._gesture_base import GestureModelBase, HeightNormalize
+from ._gesture_base import GestureModelBase
 
 
 class _GestureLSTM(nn.Module):
@@ -9,7 +9,6 @@ class _GestureLSTM(nn.Module):
     def __init__(self, in_features=732, hidden=256, num_layers=2, num_classes=3,
                  dropout=0.5):
         super().__init__()
-        self.normalize = HeightNormalize()
         self.lstm = nn.LSTM(
             in_features, hidden, num_layers,
             bidirectional=True, batch_first=True, dropout=dropout,
@@ -20,7 +19,7 @@ class _GestureLSTM(nn.Module):
         )
 
     def forward(self, x):
-        x = self.normalize(x)
+        # x: (B, C, T) → (B, T, C) for LSTM
         out, _ = self.lstm(x.permute(0, 2, 1))
         return self.classifier(out.mean(dim=1))
 
