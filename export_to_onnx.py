@@ -4,7 +4,7 @@ BATRunner passes input as (N, 73, 1) — N frames, 73 features, 1 channel.
 The ONNX model receives this and produces a single gesture-level vector.
 
 Output shapes per model:
-    floor: (1, 4)  — sigmoid probabilities for FT, HN, S, D
+    floor: (1, 4)  — pair-group softmax probabilities for FT, HN, S, D
     spine: (1, 6)  — softmax probabilities for E, F, HG, LF, SR, U
     limb:  (1, 8)  — sigmoid probabilities for LB, SL, AS, A, G, UB, DL, SY
     space: (1, 5)  — sigmoid probabilities for RV, ST, SP, H, M
@@ -80,6 +80,28 @@ class SigmoidOutputWrapper(nn.Module):
 
     def forward(self, logits):
         return torch.sigmoid(logits)
+
+
+class FloorOutputWrapper(nn.Module):
+    """Applies per-group softmax for FloorSupport structured output.
+
+    FloorSupport has two binary choices (FT↔HN, S↔D).  This wrapper
+    normalises sigmoid probabilities within each pair so that:
+        p(FT) + p(HN) = 1.0   and   p(S) + p(D) = 1.0
+    guaranteeing the 4 valid combos: FT+D, FT+S, HN+D, HN+S.
+    """
+
+    def forward(self, logits):
+        probs = torch.sigmoid(logits)
+        # Group 0: FT↔HN (indices 0,1)
+        pair_sum = probs[:, 0:1] + probs[:, 1:2] + 1e-8
+        ft = probs[:, 0:1] / pair_sum
+        hn = 1.0 - ft
+        # Group 1: S↔D (indices 2,3)
+        pair_sum = probs[:, 2:3] + probs[:, 3:4] + 1e-8
+        s = probs[:, 2:3] / pair_sum
+        d = 1.0 - s
+        return torch.cat([ft, hn, s, d], dim=1)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -161,14 +183,17 @@ def verify_onnx(onnx_path: str, pytorch_model: nn.Module, num_frames: int = 256)
 # ═══════════════════════════════════════════════════════════════════════
 
 def export_floor(checkpoint_path: str, onnx_path: str, target_frames: int = 256):
-    """Export FloorSupport multi-label model (4 sigmoid outputs)."""
+    """Export FloorSupport model (4 outputs with pair-group softmax constraint).
+
+    Probabilities are normalised within each pair: p(FT)+p(HN)=1, p(S)+p(D)=1.
+    """
     sys.path.insert(0, str(Path(__file__).resolve().parent / "FloorSupport"))
     from models.multilabel_floor import MultiLabelFloorModel
 
     m = MultiLabelFloorModel(device="cpu")
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     m.model.load_state_dict(ckpt["model_state_dict"])
-    model = make_onnx_model(m.model, SigmoidOutputWrapper())
+    model = make_onnx_model(m.model, FloorOutputWrapper())
     export_model(model, onnx_path)
     verify_onnx(onnx_path, model)
 

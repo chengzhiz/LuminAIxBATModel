@@ -187,25 +187,102 @@ def _make_multilabel_tensors(data, target_frames: int, num_codes: int, device: s
 class MultiLabelGestureModelBase:
     """Shared training / eval / predict / save / load loop for multi-label gesture models.
 
-    Uses BCEWithLogitsLoss — each output is an independent sigmoid.
     Labels are multi-hot float vectors of shape (N, num_codes).
+
+    Two modes (mutually exclusive):
+
+    1. Independent sigmoid (default, pair_groups=None):
+       BCEWithLogitsLoss on all codes.  Each code is an independent
+       sigmoid probability.  pos_weight can up-weight specific codes.
+
+    2. Structured groups (pair_groups=[(0,1), (2,3)]):
+       Each group is a set of mutually exclusive codes.  The model
+       outputs raw logits; CrossEntropyLoss is applied per group.
+       Predictions use per-group argmax, guaranteeing exactly one
+       active code per group.  Labels must have exactly one 1 in
+       each group.
     """
 
     def __init__(self, model: nn.Module, num_codes: int, target_frames: int,
-                 lr: float, weight_decay: float, device: str, name: str):
+                 lr: float, weight_decay: float, device: str, name: str,
+                 pos_weight: list = None, pair_groups: list = None,
+                 pair_weights: list = None):
         self.name = name
         self.num_codes = num_codes
         self.target_frames = target_frames
         self.lr = lr
         self.device = device
         self.model = model.to(device)
-        self.criterion = nn.BCEWithLogitsLoss()
+        self.pair_groups = pair_groups
+
+        if pair_groups is not None:
+            # Validate: every index 0..num_codes-1 appears exactly once
+            all_indices = set()
+            for grp in pair_groups:
+                for idx in grp:
+                    if idx in all_indices:
+                        raise ValueError(
+                            f"Duplicate index {idx} in pair_groups"
+                        )
+                    all_indices.add(idx)
+            if all_indices != set(range(num_codes)):
+                raise ValueError(
+                    f"pair_groups must cover all indices 0..{num_codes-1}, "
+                    f"got {sorted(all_indices)}"
+                )
+            self._use_pair_groups = True
+            # Per-pair class weights for CE loss (None = equal weight)
+            self._pair_weights = pair_weights if pair_weights else [None] * len(pair_groups)
+        else:
+            self._use_pair_groups = False
+
+        # BCE loss (used when pair_groups is None)
+        pw = None
+        if pos_weight is not None:
+            pw = torch.tensor(pos_weight, dtype=torch.float32, device=device)
+        self.criterion = nn.BCEWithLogitsLoss(pos_weight=pw)
+
         self.optimizer = torch.optim.Adam(
             model.parameters(), lr=lr, weight_decay=weight_decay
         )
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=50, eta_min=1e-5
         )
+
+    # ------------------------------------------------------------------
+    # Pair-group helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _multi_hot_to_group_labels(multi_hot, pair_groups):
+        """Convert (N, num_codes) multi-hot → (N, num_groups) class indices.
+
+        For pair_groups=[(0,1), (2,3)] and multi_hot=[1,0,0,1]:
+            Group 0: [FT=1, HN=0] → class 0
+            Group 1: [S=0,  D=1]  → class 1
+            Returns [0, 1]
+        """
+        group_labels = []
+        for grp in pair_groups:
+            group_labels.append(multi_hot[:, grp].argmax(dim=1))
+        return torch.stack(group_labels, dim=1)
+
+    @staticmethod
+    def _group_logits_to_multi_hot(logits, pair_groups):
+        """Convert (N, num_codes) logits → (N, num_codes) binary multi-hot
+        with exactly one active code per group (argmax within each group)."""
+        preds = torch.zeros_like(logits)
+        for grp in pair_groups:
+            winner = logits[:, grp].argmax(dim=1)  # (N,) — 0 or 1
+            for j, idx in enumerate(grp):
+                preds[:, idx] = (winner == j).float()
+        return preds
+
+    @staticmethod
+    def _group_logits_to_probs(logits, pair_groups):
+        """Convert (N, num_codes) logits → (N, num_codes) probabilities
+        with per-group softmax (probabilities sum to 1 within each group)."""
+        parts = [torch.softmax(logits[:, grp], dim=1) for grp in pair_groups]
+        return torch.cat(parts, dim=1)
 
     # ------------------------------------------------------------------
     def train(self, train_data, val_data=None, epoch=0, total_epochs=0):
@@ -226,11 +303,27 @@ class MultiLabelGestureModelBase:
         for i, (bx, by) in enumerate(loader):
             self.optimizer.zero_grad()
             logits = self.model(bx)
-            loss = self.criterion(logits, by)
+
+            if self._use_pair_groups:
+                # ── Cross-entropy per group ──────────────────────────
+                # Convert THIS batch's shuffled labels to group indices
+                by_group = self._multi_hot_to_group_labels(by, self.pair_groups)
+                loss = 0.0
+                for g, grp in enumerate(self.pair_groups):
+                    loss = loss + nn.functional.cross_entropy(
+                        logits[:, grp], by_group[:, g],
+                        weight=self._pair_weights[g]
+                    )
+                preds = self._group_logits_to_multi_hot(
+                    logits, self.pair_groups
+                )
+            else:
+                loss = self.criterion(logits, by)
+                preds = (torch.sigmoid(logits) > 0.5).float()
+
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item() * bx.size(0)
-            preds = (torch.sigmoid(logits) > 0.5).float()
             correct += (preds == by).float().sum().item()
             total_possible += by.numel()
             total += bx.size(0)
@@ -259,13 +352,31 @@ class MultiLabelGestureModelBase:
                 data, self.target_frames, self.num_codes, self.device
             )
             logits = self.model(X)
-            loss = self.criterion(logits, y).item()
-            preds = (torch.sigmoid(logits) > 0.5).float()
+
+            if self._use_pair_groups:
+                by_group = self._multi_hot_to_group_labels(y, self.pair_groups)
+                loss = 0.0
+                for g, grp in enumerate(self.pair_groups):
+                    loss += nn.functional.cross_entropy(
+                        logits[:, grp], by_group[:, g],
+                        weight=self._pair_weights[g]
+                    ).item()
+                preds = self._group_logits_to_multi_hot(
+                    logits, self.pair_groups
+                )
+            else:
+                loss = self.criterion(logits, y).item()
+                preds = (torch.sigmoid(logits) > 0.5).float()
+
             acc = (preds == y).float().mean().item()
         return loss, acc
 
     def predict(self, data):
-        """Return binary label vectors  —  List[List[int]]."""
+        """Return binary label vectors  —  List[List[int]].
+
+        With pair_groups: guarantees exactly one active code per group.
+        Without pair_groups: independent sigmoid > 0.5 threshold.
+        """
         if not data:
             return []
         self.model.eval()
@@ -273,10 +384,22 @@ class MultiLabelGestureModelBase:
             X, _ = _make_multilabel_tensors(
                 data, self.target_frames, self.num_codes, self.device
             )
-            return (torch.sigmoid(self.model(X)) > 0.5).int().tolist()
+            logits = self.model(X)
+            if self._use_pair_groups:
+                preds = self._group_logits_to_multi_hot(
+                    logits, self.pair_groups
+                )
+            else:
+                preds = (torch.sigmoid(logits) > 0.5).float()
+            return preds.int().tolist()
 
     def predict_proba(self, data):
-        """Return raw sigmoid probabilities  —  List[List[float]]."""
+        """Return probability for each code  —  List[List[float]].
+
+        With pair_groups: per-group softmax — probabilities sum to 1
+            within each group (e.g. p(FT) + p(HN) = 1.0).
+        Without pair_groups: independent sigmoid probabilities.
+        """
         if not data:
             return []
         self.model.eval()
@@ -284,7 +407,14 @@ class MultiLabelGestureModelBase:
             X, _ = _make_multilabel_tensors(
                 data, self.target_frames, self.num_codes, self.device
             )
-            return torch.sigmoid(self.model(X)).tolist()
+            logits = self.model(X)
+            if self._use_pair_groups:
+                probs = self._group_logits_to_probs(
+                    logits, self.pair_groups
+                )
+            else:
+                probs = torch.sigmoid(logits)
+            return probs.tolist()
 
     def save(self, path):
         torch.save({
