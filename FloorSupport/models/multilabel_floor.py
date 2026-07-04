@@ -79,10 +79,11 @@ class MultiLabelFloorModel(MultiLabelGestureModelBase):
         #   Group 0: FT vs HN  (body part)
         #   Group 1: S  vs D   (single/dual count)
         pair_groups = [(0, 1), (2, 3)]
-        # Weight D 3× in the S/D group to penalise false negatives
-        # (confusing dual-foot as single-foot is worse than the reverse).
+        # Weight D 2× in the S/D group to penalise false negatives.
+        # D (dual-foot) is harder to detect than S (single-foot), so
+        # we up-weight it to push the model to learn the distinction.
         # Group positions: S=0, D=1 within logits[:, [2,3]]
-        pair_weights = None  # equal weight per group
+        pair_weights = [None, torch.tensor([1.0, 2.0])]
         super().__init__(model, num_codes, target_frames, lr, weight_decay,
                         device, name, pair_groups=pair_groups,
                         pair_weights=pair_weights)

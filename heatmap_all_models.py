@@ -313,17 +313,35 @@ def heatmap_limb():
         logits_4 = model.model(X_t)
         probs_4 = torch.sigmoid(logits_4).cpu().numpy()
 
-    # Expand 4→8
+    # Expand 4→8 with per-pair normalisation
     n = probs_4.shape[0]
+    eps = 1e-8
+    # Expand to 8 probabilities via complement
+    lb = 1.0 - probs_4[:, 0]  # LB from body head
+    ub = probs_4[:, 0]         # UB from body head
+    sl = 1.0 - probs_4[:, 1]  # SL from limb head
+    dl = probs_4[:, 1]         # DL from limb head
+    asym = probs_4[:, 2]       # AS from symmetry head
+    sy = 1.0 - probs_4[:, 2]  # SY from symmetry head
+    a = probs_4[:, 3]          # A from contact head
+    g = 1.0 - probs_4[:, 3]   # G from contact head
+
+    # Normalise each pair to sum to 1.0
+    pair_sum = lb + ub + eps; lb, ub = lb / pair_sum, ub / pair_sum
+    pair_sum = sl + dl + eps; sl, dl = sl / pair_sum, dl / pair_sum
+    pair_sum = asym + sy + eps; asym, sy = asym / pair_sum, sy / pair_sum
+    pair_sum = a + g + eps; a, g = a / pair_sum, g / pair_sum
+
+    # Predict each label when normalised probability > 0.5
     preds_8 = np.zeros((n, 8), dtype=np.float32)
-    preds_8[:, 0] = (1.0 - probs_4[:, 0]) > 0.5  # LB
-    preds_8[:, 5] = (probs_4[:, 0]) > 0.5        # UB
-    preds_8[:, 1] = (1.0 - probs_4[:, 1]) > 0.5  # SL
-    preds_8[:, 6] = (probs_4[:, 1]) > 0.5        # DL
-    preds_8[:, 2] = (probs_4[:, 2]) > 0.5        # AS
-    preds_8[:, 7] = (1.0 - probs_4[:, 2]) > 0.5  # SY
-    preds_8[:, 3] = (probs_4[:, 3]) > 0.5        # A
-    preds_8[:, 4] = (1.0 - probs_4[:, 3]) > 0.5  # G
+    preds_8[:, 0] = lb > 0.5
+    preds_8[:, 1] = sl > 0.5
+    preds_8[:, 2] = asym > 0.5
+    preds_8[:, 3] = a > 0.5
+    preds_8[:, 4] = g > 0.5
+    preds_8[:, 5] = ub > 0.5
+    preds_8[:, 6] = dl > 0.5
+    preds_8[:, 7] = sy > 0.5
 
     trues_8 = np.zeros((n, 8), dtype=np.float32)
     trues_8[:, 0] = 1.0 - trues_4[:, 0]  # LB
@@ -338,8 +356,22 @@ def heatmap_limb():
     true_labels = [bits_to_label(t.astype(int), CODES) for t in trues_8]
     pred_labels = [bits_to_label(p.astype(int), CODES) for p in preds_8]
 
-    all_combos = sorted(set(true_labels + pred_labels),
-                        key=lambda x: (x.count("+"), x))
+    # Fixed grid of all 16 valid combos (4 complementary pairs → 2^4 = 16)
+    all_4bit = [
+        [0,0,0,0],[0,0,0,1],[0,0,1,0],[0,0,1,1],
+        [0,1,0,0],[0,1,0,1],[0,1,1,0],[0,1,1,1],
+        [1,0,0,0],[1,0,0,1],[1,0,1,0],[1,0,1,1],
+        [1,1,0,0],[1,1,0,1],[1,1,1,0],[1,1,1,1],
+    ]
+    all_8bit = []
+    for vec in all_4bit:
+        bits = np.array([1-vec[0], 1-vec[1], vec[2], vec[3],
+                         1-vec[3], vec[0], vec[1], 1-vec[2]], dtype=int)
+        all_8bit.append(bits)
+    all_combos = sorted(
+        [bits_to_label(b, CODES) for b in all_8bit],
+        key=lambda x: (x.count("+"), x)
+    )
     combo_to_idx = {c: i for i, c in enumerate(all_combos)}
     n_combos = len(all_combos)
 
@@ -365,15 +397,21 @@ def heatmap_limb():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Space  (5-code multi-label)
+# Space  (7-code multi-label with pair groups)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def heatmap_space():
+    """Confusion heatmap for Space — 7 codes, 2 pair groups, 12 valid combos.
+
+    Movement group (indices 0-3): ST, T, RV, SP  (4-way softmax)
+    Energy group   (indices 4-6): H,  M,  L      (3-way softmax)
+    3 energy × 4 movement = 12 valid combos.
+    """
     sys.path.insert(0, str(PROJECT_ROOT / "Space"))
     from Space.models.multilabel_space import MultiLabelSpaceModel
     from Space.trainers import parse_space_label
 
-    CODES = ["RV", "ST", "SP", "H", "M"]
+    CODES = ["ST", "T", "RV", "SP", "H", "M", "L"]
     CKPT = _find_latest_checkpoint(
         PROJECT_ROOT / "Space/checkpoints/multilabel_space_lstm"
     )
@@ -383,7 +421,7 @@ def heatmap_space():
     print(f"  Space  —  {CKPT.name}")
     print(f"{'='*60}")
 
-    model = MultiLabelSpaceModel(num_codes=5, target_frames=256, device="cpu")
+    model = MultiLabelSpaceModel(num_codes=7, target_frames=256, device="cpu")
     ckpt = torch.load(str(CKPT), map_location="cpu", weights_only=False)
     model.model.load_state_dict(ckpt["model_state_dict"])
     model.model.eval()
@@ -409,19 +447,27 @@ def heatmap_space():
     trues = np.array([label for _, label in gestures], dtype=np.float32)
     if trues.ndim == 1:
         trues = trues.reshape(-1, 1)
+    if trues.shape[1] < 7:
+        trues = np.pad(trues, ((0, 0), (0, 7 - trues.shape[1])), constant_values=0.0)
     X_t = torch.tensor(X, dtype=torch.float32).permute(0, 2, 1)
 
     with torch.no_grad():
         logits = model.model(X_t)
-        preds = (torch.sigmoid(logits) > 0.5).float().cpu().numpy()
+        if model._use_pair_groups:
+            preds = model._group_logits_to_multi_hot(
+                logits, model.pair_groups
+            ).cpu().numpy()
+        else:
+            preds = (torch.sigmoid(logits) > 0.5).float().cpu().numpy()
 
     true_labels = [bits_to_label(t.astype(int), CODES) for t in trues]
     pred_labels = [bits_to_label(p.astype(int), CODES) for p in preds]
 
-    all_combos = sorted(set(true_labels + pred_labels),
-                        key=lambda x: (x.count("+"), -len(x), x))
+    # Show ALL 12 valid combos (4 movement x 3 energy), even empty ones
+    all_combos = [f"{mv}+{en}" for mv in ["ST", "T", "RV", "SP"]
+                               for en in ["H", "M", "L"]]
     combo_to_idx = {c: i for i, c in enumerate(all_combos)}
-    n_combos = len(all_combos)
+    n_combos = len(all_combos)  # 12
 
     cm = np.zeros((n_combos, n_combos), dtype=int)
     for t, p in zip(true_labels, pred_labels):
@@ -432,13 +478,15 @@ def heatmap_space():
         total = cm[i].sum()
         correct = cm[i, i]
         if total > 0:
-            print(f"  {c:>12s}: {correct}/{total} correct ({correct/total:.0%})")
+            print(f"  {c:>8s}: {correct}/{total} correct ({correct/total:.0%})")
+        else:
+            print(f"  {c:>8s}: (no samples)")
 
     exact = (preds == trues).all(axis=1).mean()
     draw_heatmap(
         cm, all_combos, all_combos,
         f"Space — True vs Predicted\n"
-        f"{len(gestures)} samples  •  {n_combos} combos  •  "
+        f"{len(gestures)} samples  •  {n_combos} valid combos (4 mvmt x 3 energy)  •  "
         f"exact match: {exact:.1%}",
         "assets/heatmap_space.png"
     )

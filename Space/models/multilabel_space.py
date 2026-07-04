@@ -1,16 +1,18 @@
-"""Multi-label model for Space — 5 sigmoid outputs: RV, ST, SP, H, M.
+"""Multi-label model for Space — 7 outputs in 2 pair groups.
 
-Matches Unity `space_codes` order in BATModelRunner.cs.
+Movement group (softmax): ST, T, RV, SP  (indices 0-3)
+Energy group (softmax):   H,  M, L      (indices 4-6)
+
+12 valid combos = 4 movement x 3 energy.
 """
 
+import torch
 import torch.nn as nn
 import sys
 from pathlib import Path
+import importlib.util
 
 _floor = Path(__file__).resolve().parents[2] / "FloorSupport"
-# Import MultiLabelGestureModelBase via direct module loading to avoid
-# conflict with Space's own models package
-import importlib.util
 _mlgb_path = _floor / "models" / "_gesture_base.py"
 _spec = importlib.util.spec_from_file_location("fs_gesture_base", _mlgb_path)
 _fs_gb = importlib.util.module_from_spec(_spec)
@@ -19,8 +21,8 @@ MultiLabelGestureModelBase = _fs_gb.MultiLabelGestureModelBase
 
 
 class _MultiLabelSpace(nn.Module):
-    """Gesture-level multi-label model.  Input: (B, 73, T) → Output: (B, 5)."""
-    def __init__(self, in_features=73, num_codes=5, hidden=256, num_layers=2,
+    """Gesture-level multi-label model.  Input: (B, 73, T) -> Output: (B, 7)."""
+    def __init__(self, in_features=73, num_codes=7, hidden=256, num_layers=2,
                  dropout=0.5):
         super().__init__()
         self.lstm = nn.LSTM(
@@ -40,11 +42,18 @@ class _MultiLabelSpace(nn.Module):
 class MultiLabelSpaceModel(MultiLabelGestureModelBase):
     """BiLSTM multi-label model for Space.
 
-    Output codes (in order): RV, ST, SP, H, M
+    Output codes: ST, T, RV, SP, H, M, L
+
+    Uses pair_groups to structurally enforce mutual exclusivity:
+      Group 0: ST, T, RV, SP  (movement — 4-way softmax)
+      Group 1: H,  M, L       (energy   — 3-way softmax)
+
+    Predictions are always one of 12 valid combos.
     """
-    def __init__(self, num_codes=5, target_frames=256, lr=1e-3,
+    def __init__(self, num_codes=7, target_frames=256, lr=1e-3,
                  weight_decay=1e-4, dropout=0.5, device="cpu",
                  name="multilabel_space_lstm"):
         model = _MultiLabelSpace(in_features=73, num_codes=num_codes, dropout=dropout)
+        pair_groups = [(0, 1, 2, 3), (4, 5, 6)]
         super().__init__(model, num_codes, target_frames, lr, weight_decay,
-                        device, name)
+                        device, name, pair_groups=pair_groups)

@@ -1,4 +1,4 @@
-"""Training entry point for Space — multi-label (5-code) classification."""
+"""Training entry point for Space — multi-label (7-code) classification."""
 import argparse
 import sys
 from pathlib import Path
@@ -29,7 +29,7 @@ def main():
     if not data_dir.is_absolute():
         data_dir = (Path(__file__).resolve().parent / data_dir).resolve()
 
-    model = MultiLabelSpaceModel(num_codes=5, lr=args.lr, device=args.device)
+    model = MultiLabelSpaceModel(num_codes=7, lr=args.lr, device=args.device)
     trainer = SpaceMultiLabelTrainer(
         model=model, data_dir=data_dir,
         epochs=args.epochs, batch_size=16,

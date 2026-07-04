@@ -280,7 +280,12 @@ class MultiLabelGestureModelBase:
     @staticmethod
     def _group_logits_to_probs(logits, pair_groups):
         """Convert (N, num_codes) logits → (N, num_codes) probabilities
-        with per-group softmax (probabilities sum to 1 within each group)."""
+        with per-group softmax (probabilities sum to 1 within each group).
+
+        For binary groups (2 codes): exactly one probability > 0.5,
+        so a uniform 0.5 threshold works.
+        For groups with >2 codes: use argmax to pick the winner.
+        """
         parts = [torch.softmax(logits[:, grp], dim=1) for grp in pair_groups]
         return torch.cat(parts, dim=1)
 

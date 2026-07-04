@@ -1,7 +1,9 @@
-"""Multi-label trainer for Space — 5-code output: RV, ST, SP, H, M.
+"""Multi-label trainer for Space — 7-code output in 2 pair groups.
 
-Matches Unity space_codes order in BATModelRunner.cs.
-No training data for M or L — they train to near-0.
+Movement group: ST, T, RV, SP  (indices 0-3)
+Energy group:   H,  M, L       (indices 4-6)
+
+12 valid combos = 4 movement x 3 energy.
 """
 
 import sys
@@ -11,7 +13,6 @@ import importlib.util
 _floor = Path(__file__).resolve().parents[1] / "FloorSupport"
 sys.path.insert(0, str(_floor))
 
-# Avoid circular import — load FloorSupport trainers explicitly
 _fs_trainers_path = _floor / "trainers.py"
 spec = importlib.util.spec_from_file_location("fs_trainers", _fs_trainers_path)
 _fs_trainers = importlib.util.module_from_spec(spec)
@@ -19,42 +20,39 @@ spec.loader.exec_module(_fs_trainers)
 MultiLabelGestureTrainer = _fs_trainers.MultiLabelGestureTrainer
 
 
-# Code order matching Unity: RV, ST, SP, H, M
-def parse_space_label(dir_name: str):
-    """Parse Space directory names into 5-element multi-hot vectors.
+# Code order: [ST, T, RV, SP, H, M, L]
+#   indices 0-3: movement group (4-way softmax)
+#   indices 4-6: energy group   (3-way softmax)
+_SPACE_CODES = ["ST", "T", "RV", "SP", "H", "M", "L"]
 
-    h_rv_high_revolution   → [1, 0, 0, 1, 0]  (RV, H)
-    h_sp_high_spring       → [0, 0, 1, 1, 0]  (SP, H)
-    h_st_high_stationary   → [0, 1, 0, 1, 0]  (ST, H)
+# Mapping from directory-name tokens to group-local indices
+_MOVEMENT_MAP = {"st": 0, "t": 1, "rv": 2, "sp": 3}
+_ENERGY_MAP   = {"h": 4, "m": 5, "l": 6}
+
+
+def parse_space_label(dir_name: str):
+    """Parse Space directory names into 7-element multi-hot vectors.
+
+    h_rv_high_revolution   -> [0, 0, 1, 0,  1, 0, 0]  (RV, H)
+    h_sp_high_spring       -> [0, 0, 0, 1,  1, 0, 0]  (SP, H)
+    h_st_high_stationary   -> [1, 0, 0, 0,  1, 0, 0]  (ST, H)
     """
     parts = dir_name.split("_")
+    energy = parts[0]    # 'h', 'm', or 'l'
+    movement = parts[1]  # 'rv', 'sp', 'st', or 't'
 
-    # Parse energy: h → H=1, m → M=1, l → neither (no data)
-    energy = parts[0]  # 'h', 'm', or 'l'
+    label = [0.0] * 7
 
-    # Parse movement
-    movement = parts[1]  # 'rv', 'sp', or 'st'
-
-    # Build label: [RV, ST, SP, H, M]
-    label = [0.0, 0.0, 0.0, 0.0, 0.0]
-
-    if movement == "rv":
-        label[0] = 1.0  # RV
-    elif movement == "st":
-        label[1] = 1.0  # ST
-    elif movement == "sp":
-        label[2] = 1.0  # SP
-
-    if energy == "h":
-        label[3] = 1.0  # H
-    elif energy == "m":
-        label[4] = 1.0  # M
+    if movement in _MOVEMENT_MAP:
+        label[_MOVEMENT_MAP[movement]] = 1.0
+    if energy in _ENERGY_MAP:
+        label[_ENERGY_MAP[energy]] = 1.0
 
     return label
 
 
 class SpaceMultiLabelTrainer(MultiLabelGestureTrainer):
-    """Trainer that parses Space directory names into 5-element multi-hot labels."""
+    """Trainer that parses Space directory names into 7-element multi-hot labels."""
 
     def _parse_label(self, dir_name: str):
         return parse_space_label(dir_name)

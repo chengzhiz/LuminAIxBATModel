@@ -523,21 +523,46 @@ def _expand_preds_4to8(probs_4: np.ndarray) -> np.ndarray:
 
     probs_4: (N, 4) — [p_UB, p_DL, p_AS, p_A]
     Returns: (N, 8) binary — [LB, SL, AS, A, G, UB, DL, SY]
+
+    Each complementary pair is normalised to sum to 1.0 before thresholding.
+    Each label is predicted when its normalised probability > 0.5.
     """
     n = probs_4.shape[0]
+    eps = 1e-8
+    # Expand to 8 probabilities via complement
+    lb = 1.0 - probs_4[:, 0]  # LB from body head
+    ub = probs_4[:, 0]         # UB from body head
+    sl = 1.0 - probs_4[:, 1]  # SL from limb head
+    dl = probs_4[:, 1]         # DL from limb head
+    asym = probs_4[:, 2]       # AS from symmetry head
+    sy = 1.0 - probs_4[:, 2]  # SY from symmetry head
+    a = probs_4[:, 3]          # A from contact head
+    g = 1.0 - probs_4[:, 3]   # G from contact head
+
+    # Normalise each pair so they sum to 1.0
+    # Pair 0: LB↔UB
+    pair_sum = lb + ub + eps
+    lb, ub = lb / pair_sum, ub / pair_sum
+    # Pair 1: SL↔DL
+    pair_sum = sl + dl + eps
+    sl, dl = sl / pair_sum, dl / pair_sum
+    # Pair 2: AS↔SY
+    pair_sum = asym + sy + eps
+    asym, sy = asym / pair_sum, sy / pair_sum
+    # Pair 3: A↔G
+    pair_sum = a + g + eps
+    a, g = a / pair_sum, g / pair_sum
+
+    # Predict each label when normalised probability > 0.5
     preds_8 = np.zeros((n, 8), dtype=np.float32)
-    # Head 0: body (p_UB)
-    preds_8[:, 0] = (1.0 - probs_4[:, 0]) > 0.5  # LB
-    preds_8[:, 5] = (probs_4[:, 0]) > 0.5         # UB
-    # Head 1: limb (p_DL)
-    preds_8[:, 1] = (1.0 - probs_4[:, 1]) > 0.5  # SL
-    preds_8[:, 6] = (probs_4[:, 1]) > 0.5         # DL
-    # Head 2: symmetry (p_AS)
-    preds_8[:, 2] = (probs_4[:, 2]) > 0.5         # AS
-    preds_8[:, 7] = (1.0 - probs_4[:, 2]) > 0.5  # SY
-    # Head 3: contact (p_A)
-    preds_8[:, 3] = (probs_4[:, 3]) > 0.5         # A
-    preds_8[:, 4] = (1.0 - probs_4[:, 3]) > 0.5  # G
+    preds_8[:, 0] = lb > 0.5
+    preds_8[:, 1] = sl > 0.5
+    preds_8[:, 2] = asym > 0.5
+    preds_8[:, 3] = a > 0.5
+    preds_8[:, 4] = g > 0.5
+    preds_8[:, 5] = ub > 0.5
+    preds_8[:, 6] = dl > 0.5
+    preds_8[:, 7] = sy > 0.5
     return preds_8
 
 
@@ -571,11 +596,11 @@ def _expand_8(logits_4):
 
 
 def evaluate_space(device: str = "cpu", plot: bool = False):
-    """Space: multi-label, 5 codes [RV, ST, SP, H, M], BiLSTM, target_frames=256."""
+    """Space: multi-label, 7 codes [ST, T, RV, SP, H, M, L] in 2 pair groups, BiLSTM."""
     from Space.models.multilabel_space import MultiLabelSpaceModel
     from Space.trainers import parse_space_label
 
-    CODES = ["RV", "ST", "SP", "H", "M"]
+    CODES = ["ST", "T", "RV", "SP", "H", "M", "L"]
     TARGET_FRAMES = 256
     CKPT = _find_latest_checkpoint(
         PROJECT_ROOT / "Space/checkpoints/multilabel_space_lstm"
@@ -583,11 +608,12 @@ def evaluate_space(device: str = "cpu", plot: bool = False):
     VAL_DIR = PROJECT_ROOT / "Space/dataset/space_raw/val"
 
     print(f"\n{'█'*85}")
-    print(f"  Space  —  5 codes: {', '.join(CODES)}")
+    print(f"  Space  —  {len(CODES)} codes: {', '.join(CODES)}")
+    print(f"  pair_groups: movement [ST,T,RV,SP]  |  energy [H,M,L]")
     print(f"{'█'*85}")
 
     # Load model
-    model = MultiLabelSpaceModel(num_codes=5, target_frames=TARGET_FRAMES, device=device)
+    model = MultiLabelSpaceModel(num_codes=7, target_frames=TARGET_FRAMES, device=device)
     ckpt = torch.load(str(CKPT), map_location=device, weights_only=False)
     model.model.load_state_dict(ckpt["model_state_dict"])
     model.model.eval()
@@ -600,12 +626,17 @@ def evaluate_space(device: str = "cpu", plot: bool = False):
         return
 
     X, labels_list = prepare_batch(gestures, TARGET_FRAMES, device)
-    trues = np.array(labels_list, dtype=np.float32)  # (N, 5)
+    trues = np.array(labels_list, dtype=np.float32)  # (N, 7)
 
-    # Inference
+    # Inference — use pair-group argmax for structurally valid predictions
     with torch.no_grad():
         logits = model.model(X)
-        preds = (torch.sigmoid(logits) > 0.5).float().cpu().numpy()
+        if model._use_pair_groups:
+            preds = model._group_logits_to_multi_hot(
+                logits, model.pair_groups
+            ).cpu().numpy()
+        else:
+            preds = (torch.sigmoid(logits) > 0.5).float().cpu().numpy()
 
     # Overall exact match
     exact_match = (preds == trues).all(axis=1).mean()

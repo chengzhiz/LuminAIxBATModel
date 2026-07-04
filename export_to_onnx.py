@@ -6,8 +6,8 @@ The ONNX model receives this and produces a single gesture-level vector.
 Output shapes per model:
     floor: (1, 4)  — pair-group softmax probabilities for FT, HN, S, D
     spine: (1, 6)  — softmax probabilities for E, F, HG, LF, SR, U
-    limb:  (1, 8)  — sigmoid probabilities for LB, SL, AS, A, G, UB, DL, SY
-    space: (1, 5)  — sigmoid probabilities for RV, ST, SP, H, M
+    limb:  (1, 8)  — per-pair normalised probabilities for LB, SL, AS, A, G, UB, DL, SY
+    space: (1, 7)  — pair-group softmax for ST, T, RV, SP | H, M, L
 
 Usage:
     python export_to_onnx.py --model floor --checkpoint path/to/model.pt --output path/to/model.onnx
@@ -51,21 +51,38 @@ class BATRunnerInputWrapper(nn.Module):
 # ═══════════════════════════════════════════════════════════════════════
 
 class LimbExpressionOutputWrapper(nn.Module):
-    """Expands 4-head output to 8 Unity codes with sigmoid baked in."""
+    """Applies per-pair normalisation for LimbExpression structured output.
+
+    LimbExpression has four binary choices forming complementary pairs:
+        LB↔UB, SL↔DL, AS↔SY, A↔G.
+    This wrapper normalises probabilities within each pair so that:
+        p(LB) + p(UB) = 1.0,  p(SL) + p(DL) = 1.0,
+        p(AS) + p(SY) = 1.0,  p(A)  + p(G)  = 1.0
+    Each label is predicted when its probability > 0.5.
+    """
 
     def forward(self, logits_4):
-        # logits_4: (B, 4) — raw logits from 4 heads
-        probs = torch.sigmoid(logits_4)
-        return torch.cat([
-            1.0 - probs[:, 0:1],           # LB
-            1.0 - probs[:, 1:2],           # SL
-            probs[:, 2:3],                 # AS
-            probs[:, 3:4],                 # A
-            1.0 - probs[:, 3:4],           # G
-            probs[:, 0:1],                 # UB
-            probs[:, 1:2],                 # DL
-            1.0 - probs[:, 2:3],           # SY
-        ], dim=1)  # (B, 8)
+        # logits_4: (B, 4) — raw logits from 4 heads [body, limb, symmetry, contact]
+        probs = torch.sigmoid(logits_4)  # (B, 4) — [p_UB, p_DL, p_AS, p_A]
+
+        # Pair 0: LB↔UB (body) — indices 0, 5 in 8-code output
+        pair_sum = (1.0 - probs[:, 0:1]) + probs[:, 0:1] + 1e-8
+        lb = (1.0 - probs[:, 0:1]) / pair_sum
+        ub = 1.0 - lb
+        # Pair 1: SL↔DL (limb) — indices 1, 6 in 8-code output
+        pair_sum = (1.0 - probs[:, 1:2]) + probs[:, 1:2] + 1e-8
+        sl = (1.0 - probs[:, 1:2]) / pair_sum
+        dl = 1.0 - sl
+        # Pair 2: AS↔SY (symmetry) — indices 2, 7 in 8-code output
+        pair_sum = probs[:, 2:3] + (1.0 - probs[:, 2:3]) + 1e-8
+        asym = probs[:, 2:3] / pair_sum
+        sy = 1.0 - asym
+        # Pair 3: A↔G (contact) — indices 3, 4 in 8-code output
+        pair_sum = probs[:, 3:4] + (1.0 - probs[:, 3:4]) + 1e-8
+        a = probs[:, 3:4] / pair_sum
+        g = 1.0 - a
+
+        return torch.cat([lb, sl, asym, a, g, ub, dl, sy], dim=1)  # (B, 8)
 
 
 class SpineOutputWrapper(nn.Module):
@@ -102,6 +119,23 @@ class FloorOutputWrapper(nn.Module):
         s = probs[:, 2:3] / pair_sum
         d = 1.0 - s
         return torch.cat([ft, hn, s, d], dim=1)
+
+
+class SpaceOutputWrapper(nn.Module):
+    """Applies per-group softmax for Space structured output.
+
+    Space has two independent choices:
+      Movement group (indices 0-3): ST, T, RV, SP  (4-way softmax)
+      Energy group   (indices 4-6): H,  M, L       (3-way softmax)
+
+    For groups with >2 codes, use argmax to select the winner.
+    For binary groups (Floor, Limb), 0.5 threshold works.
+    """
+
+    def forward(self, logits):
+        mv = torch.softmax(logits[:, 0:4], dim=1)
+        en = torch.softmax(logits[:, 4:7], dim=1)
+        return torch.cat([mv, en], dim=1)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -212,7 +246,7 @@ def export_spine(checkpoint_path: str, onnx_path: str, target_frames: int = 256)
 
 
 def export_limb(checkpoint_path: str, onnx_path: str, target_frames: int = 128):
-    """Export LimbExpression model (4→8 expanded sigmoid outputs)."""
+    """Export LimbExpression model (4→8 per-pair normalised outputs)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent / "LimbExpression"))
     from models.multilabel_cnn import MultiLabelCNN
 
@@ -225,14 +259,18 @@ def export_limb(checkpoint_path: str, onnx_path: str, target_frames: int = 128):
 
 
 def export_space(checkpoint_path: str, onnx_path: str, target_frames: int = 256):
-    """Export Space multi-label model (5 sigmoid outputs)."""
+    """Export Space model (7 outputs with pair-group softmax constraint).
+
+    Movement group (indices 0-3): ST, T, RV, SP (4-way softmax)
+    Energy group   (indices 4-6): H,  M, L      (3-way softmax)
+    """
     sys.path.insert(0, str(Path(__file__).resolve().parent / "Space"))
     from models.multilabel_space import MultiLabelSpaceModel
 
     m = MultiLabelSpaceModel(device="cpu")
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     m.model.load_state_dict(ckpt["model_state_dict"])
-    model = make_onnx_model(m.model, SigmoidOutputWrapper())
+    model = make_onnx_model(m.model, SpaceOutputWrapper())
     export_model(model, onnx_path)
     verify_onnx(onnx_path, model)
 

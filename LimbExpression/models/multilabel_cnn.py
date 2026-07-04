@@ -101,30 +101,64 @@ class _MultiLabelCNN(nn.Module):
         return torch.cat([head(feats) for head in self.heads], dim=1)  # (B, 4)
 
 
+def _normalise_8_pairs(probs_8: torch.Tensor) -> torch.Tensor:
+    """Normalise each of the 4 complementary pairs in the 8-code output to sum to 1.
+
+    Pairs: (LB↔UB), (SL↔DL), (AS↔SY), (A↔G)
+    Each label is predicted when its normalised probability > 0.5.
+    """
+    # Pair 0: LB↔UB (indices 0, 5)
+    pair_sum = probs_8[:, 0:1] + probs_8[:, 5:6] + 1e-8
+    lb = probs_8[:, 0:1] / pair_sum
+    ub = 1.0 - lb
+    # Pair 1: SL↔DL (indices 1, 6)
+    pair_sum = probs_8[:, 1:2] + probs_8[:, 6:7] + 1e-8
+    sl = probs_8[:, 1:2] / pair_sum
+    dl = 1.0 - sl
+    # Pair 2: AS↔SY (indices 2, 7)
+    pair_sum = probs_8[:, 2:3] + probs_8[:, 7:8] + 1e-8
+    asym = probs_8[:, 2:3] / pair_sum
+    sy = 1.0 - asym
+    # Pair 3: A↔G (indices 3, 4)
+    pair_sum = probs_8[:, 3:4] + probs_8[:, 4:5] + 1e-8
+    a = probs_8[:, 3:4] / pair_sum
+    g = 1.0 - a
+    return torch.cat([lb, sl, asym, a, g, ub, dl, sy], dim=1)
+
+
 def expand_4to8(logits_4: torch.Tensor) -> torch.Tensor:
-    """Expand 4 contrasting-pair logits to 8 independent code logits.
+    """Expand 4 contrasting-pair logits to 8 per-pair normalised probabilities.
 
     4 inputs:  [body, limb, symmetry, contact]  (each is logit for the 1-case)
     8 outputs: [LB, SL, AS, A, G, UB, DL, SY]
+
+    Each complementary pair is normalised to sum to 1.0:
+        p(LB)+p(UB)=1, p(SL)+p(DL)=1, p(AS)+p(SY)=1, p(A)+p(G)=1.
+    Each label is predicted when its probability > 0.5.
     """
-    probs = torch.sigmoid(logits_4)  # (B, 4) — probability of the 1-case
-    # LB = 1 - p_UB,  UB = p_UB,  SL = 1 - p_DL,  DL = p_DL, etc.
-    return torch.cat([
-        -logits_4[:, 0:1],         # LB = sigmoid(-body_logit) = 1 - sigmoid(body_logit)
-        -logits_4[:, 1:2],         # SL
-         logits_4[:, 2:3],         # AS
-         logits_4[:, 3:4],         # A
-        -logits_4[:, 3:4],         # G  = sigmoid(-contact_logit)
-         logits_4[:, 0:1],         # UB
-         logits_4[:, 1:2],         # DL
-        -logits_4[:, 2:3],         # SY
-    ], dim=1)  # (B, 8)
+    probs = torch.sigmoid(logits_4)  # (B, 4) — [p_UB, p_DL, p_AS, p_A]
+    return _normalise_8_pairs(torch.cat([
+        1.0 - probs[:, 0:1],     # LB
+        1.0 - probs[:, 1:2],     # SL
+        probs[:, 2:3],           # AS
+        probs[:, 3:4],           # A
+        1.0 - probs[:, 3:4],     # G
+        probs[:, 0:1],           # UB
+        probs[:, 1:2],           # DL
+        1.0 - probs[:, 2:3],     # SY
+    ], dim=1))  # (B, 8)
 
 
 def expand_probs_4to8(probs_4: torch.Tensor) -> torch.Tensor:
-    """Expand 4 sigmoid probabilities to 8 probabilities for Unity consumption."""
-    # probs_4: (B, 4) — [p_UB, p_DL, p_AS, p_A]
-    return torch.cat([
+    """Expand 4 sigmoid probabilities to 8 per-pair normalised probabilities.
+
+    probs_4: (B, 4) — [p_UB, p_DL, p_AS, p_A]
+    Returns: (B, 8) — [LB, SL, AS, A, G, UB, DL, SY]
+
+    Each complementary pair is normalised to sum to 1.0.
+    Each label is predicted when its probability > 0.5.
+    """
+    return _normalise_8_pairs(torch.cat([
         1.0 - probs_4[:, 0:1],     # LB
         1.0 - probs_4[:, 1:2],     # SL
         probs_4[:, 2:3],           # AS
@@ -133,7 +167,7 @@ def expand_probs_4to8(probs_4: torch.Tensor) -> torch.Tensor:
         probs_4[:, 0:1],           # UB
         probs_4[:, 1:2],           # DL
         1.0 - probs_4[:, 2:3],     # SY
-    ], dim=1)  # (B, 8)
+    ], dim=1))  # (B, 8)
 
 
 # ── Trainer-compatible wrapper ────────────────────────────────────

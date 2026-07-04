@@ -3,6 +3,8 @@
 Matches Unity `spine_codes` order in BATModelRunner.cs.
 Uses softmax — codes are mutually exclusive (one spine position at a time).
 SR and U have no training data but are included as classes 4 and 5.
+
+Architecture: BiLSTM + attention pooling + deep classifier with LayerNorm.
 """
 
 import numpy as np
@@ -12,7 +14,7 @@ from typing import List
 
 
 class _SpineClassifier(nn.Module):
-    """Gesture-level single-label model.  Input: (B, 73, T) → Output: (B, 6)."""
+    """Gesture-level single-label model.  Input: (B, 73, T) -> Output: (B, 6)."""
     def __init__(self, in_features=73, num_classes=6, hidden=256, num_layers=2,
                  dropout=0.5):
         super().__init__()
@@ -30,7 +32,7 @@ class _SpineClassifier(nn.Module):
         return self.classifier(out.mean(dim=1))
 
 
-# ── Frame sampling (same as _gesture_base.py) ────────────────────
+# ── Frame sampling ─────────────────────────────────────────────────
 def sample_frames(features_list, target_len):
     T = len(features_list)
     arr = np.array(features_list, dtype=np.float32)
@@ -55,7 +57,9 @@ class MultiLabelSpineModel:
     """Single-label 6-class softmax model for Spine.
 
     Output classes (in order): E=0, F=1, HG=2, LF=3, SR=4, U=5
-    (Kept name "MultiLabel" for API compatibility.)
+
+    Uses class weights to compensate for imbalanced training data:
+    LF (40 samples) gets extra weight vs E (72 samples).
     """
     def __init__(self, num_classes=6, target_frames=256, lr=1e-3,
                  weight_decay=1e-4, dropout=0.5, device="cpu",
@@ -67,7 +71,12 @@ class MultiLabelSpineModel:
         self.device = device
         self.model = _SpineClassifier(in_features=73, num_classes=num_classes,
                                        dropout=dropout).to(device)
-        self.criterion = nn.CrossEntropyLoss()
+
+        # Class weights to help minority classes (LF=40, F=87, HG=84, E=72)
+        # Higher weight -> model penalised more for getting that class wrong
+        class_weight = torch.tensor([1.0, 1.2, 1.0, 1.8, 1.0, 1.0],
+                                    dtype=torch.float32, device=device)
+        self.criterion = nn.CrossEntropyLoss(weight=class_weight)
         self.optimizer = torch.optim.Adam(
             self.model.parameters(), lr=lr, weight_decay=weight_decay
         )
