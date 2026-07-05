@@ -1,7 +1,11 @@
 """Training entry point for LimbExpression — 8-code multi-label classification."""
 import argparse
+import random
 import sys
 from pathlib import Path
+
+import numpy as np
+import torch
 
 # Ensure this package is importable
 _here = Path(__file__).resolve().parent
@@ -13,6 +17,14 @@ from models.multilabel_cnn import MultiLabelCNN
 from trainers import LimbExpressionMultiLabelTrainer
 
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train multi-label model for LimbExpression")
     parser.add_argument("--data-dir", type=str, default="dataset/limb_expression_raw")
@@ -20,11 +32,14 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--device", type=str, default="cpu",
                         choices=["cpu", "mps", "cuda"])
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    set_seed(args.seed)
     data_dir = Path(args.data_dir)
     if not data_dir.is_absolute():
         data_dir = (Path(__file__).resolve().parent / data_dir).resolve()

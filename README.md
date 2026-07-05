@@ -2,6 +2,51 @@
 
 <img src="assets/BAT.png" width="600" alt="BAT codes">
 
+## Design Decisions
+
+1. **COG-relative plumbline features.** All four models use 73-dimensional plumb-line features (21 distances + 52 angles between body keypoints) instead of raw 732-dim joint positions. These features are computed relative to the center of gravity, making them translation-invariant. The plumbline distances are ratios between body segments, so a tall adult and a short child produce the same feature values for the same pose.
+
+2. **Height-invariant normalization.** For raw-feature models (gesture CNN variants), `HeightNormalize` divides all position channels by the per-sample skeleton height (max Y − min Y). For plumbline models, this is unnecessary — the distances are already scale-invariant since they measure proportions between keypoints, not absolute coordinates. Both approaches ensure the model generalizes across different body heights.
+
+3. **D-weight penalty for FloorSupport false negatives.** The FloorSupport model has a built-in class weight: D (dual-foot) is weighted **4×** in the S↔D CrossEntropyLoss pair. This aggressively penalizes missing a dual-foot ("flamingo") prediction — it's better to falsely say "dual feet" for a single-foot gesture than to miss a genuine dual-foot. The weight is applied via `pair_weights = [None, tensor([1.0, 4.0])]` on the S/D group.
+
+4. **Model architecture experiments per region.** Different architectures were tested for each body region before settling on the current ones:
+   - **FloorSupport:** BiLSTM + attention pooling + pair-group CrossEntropyLoss (replaced BCE + soft mutex penalty which allowed invalid combos like "FT alone")
+   - **Spine:** BiLSTM + mean pooling + class-weighted CrossEntropyLoss (attention pooling and deeper classifiers overfit on the small 283-sample dataset)
+   - **LimbExpression:** 1D CNN trunk + 4 independent sigmoid heads with per-pair normalization (contrastive-pair architecture was the original design and works best)
+   - **Space:** BiLSTM + mean pooling + pair-group CrossEntropyLoss (expanded from 5 to 7 codes to cover all 12 valid movement×energy combos)
+
+5. **Random seeds for reproducibility.** All training scripts accept `--seed` (default 42) and set `random`, `numpy`, and `torch` seeds before training. Identical data shuffling, weight initialization, and dropout patterns across runs — critical for publishing and peer review.
+
+## BAT Origins
+
+BAT (Body Articulation Type) codes were developed at the **Georgia Tech Expressive Machinery Lab** as part of the **LuminAI** project — an interactive AI dance partner that improvises movement with a human participant. The taxonomy is grounded in **Laban Movement Analysis (LMA)**, specifically its **Body** component, which categorizes how body parts are coordinated during movement.
+
+**Key contributors:** Milka Trajkova (research scientist, former professional ballet dancer), Brian Magerko (PI), Duri Long, Manoj Deshpande, and Andrea Knowlton (Kennesaw State University dance professor).
+
+**Reference paper:** Trajkova, Long, Deshpande, Knowlton, & Magerko (2024). *"Exploring Collaborative Movement Improvisation Towards the Design of LuminAI — a Co-Creative AI Dance Partner."* CHI '24, ACM Conference on Human Factors in Computing Systems.
+
+The four BAT regions map to LMA: floor contact patterns (FloorSupport), spine articulation (Spine), limb expression (LimbExpression), and spatial/energy levels (Space). Viewpoints movement theory (Overlie, Bogart & Landau) also influenced the taxonomy.
+
+## Future Work
+
+### Data Augmentation
+
+Several augmentation strategies could expand the limited training set:
+
+- **Time warping:** Stretch or compress gesture timelines (±20%) to simulate faster/slower execution.
+- **Left-right mirroring:** Flip the skeleton's X-axis to double the dataset (especially helpful for LimbExpression SL↔DL and LB↔UB).
+- **Gaussian noise injection:** Jitter (σ=0.02) on plumbline features to simulate Kinect sensor noise.
+- **Frame dropout:** Randomly drop 10–20% of frames to simulate occluded keypoints.
+
+### AI-Generated Moves for Missing Categories
+
+Many valid BAT combinations have zero training data (Space: 9 of 12 combos, LimbExpression: 13 of 16, FloorSupport: HN+S, Spine: SR/U). A potential workflow:
+
+1. **Motion generation:** Use a pretrained dance generation model (MDM, EDGE, or Motion Diffusion Model) conditioned on the missing BAT label combo.
+2. **Human-in-the-loop labeling:** A dance expert reviews generated motions, keeping only those that correctly embody the target codes.
+3. **Augment training:** Accepted motions join the training set; low-confidence ones could use soft labels during training.
+
 This repository trains and deploys small neural networks that classify body movement into BAT (Body Articulation Type) codes across four body regions. All models use 73-dimensional plumb-line features per bodyframe and output per-pair normalised probabilities where a **0.5 threshold** selects the active label in each binary pair. For groups with >2 codes (Spine, Space), use **argmax**.
 
 ---
@@ -120,3 +165,54 @@ This repository trains and deploys small neural networks that classify body move
 
 ### Space
 <img src="assets/heatmap_space.png" width="700" alt="Space confusion matrix">
+
+---
+
+## BAT Code Slogans
+
+Each active code triggers a natural-language slogan displayed in the LuminAI UI. Codes marked `—` have no `batdesc_` GameObject in the current Unity scene and need one added.
+
+### FloorSupport
+
+| Code | Slogan |
+|:---|:---|
+| D-FT | I think you're balancing on two feet. |
+| S-FT | I think you're balancing on one foot, like a flamingo. |
+| D-HN | I think you're balancing on two hands, like an acrobat. |
+| S-HN | — |
+
+### Spine
+
+| Code | Slogan |
+|:---|:---|
+| E | I think your spine is stretching back, like you're letting out a big... |
+| F | I think your spine is bending forward, almost like you're bowing. |
+| HG | I think you're moving your spine like an inflatable tube man. |
+| LF | I think your spine is bending side to side like a fitness instructor. |
+| SR | I think your spine is twisting at your waist like you're looking... |
+| U | — |
+
+### LimbExpression
+
+| Code | Slogan |
+|:---|:---|
+| LB | — |
+| SL | I believe you're using one limb. |
+| AS | I think one or both limbs are moving differently from the other. |
+| A | From what I can see, one or more limbs are moving in the air. |
+| G | I think one or more limbs are moving, while still touching the ground. |
+| UB | — |
+| DL | I think you're using, let me think, two limbs. |
+| SY | I think both limbs are mirroring each other. |
+
+### Space
+
+| Code | Slogan |
+|:---|:---|
+| ST | I think you're stationary or moving in place! |
+| T | — |
+| RV | I think you're turning or spinning like a top! |
+| SP | I think you're jumping in the air! |
+| H | I think you're in high space, meaning your feet—heels and toes—are... |
+| M | I think you're in medium space, meaning your joints are vertically... |
+| L | — |

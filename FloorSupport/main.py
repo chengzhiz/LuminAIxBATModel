@@ -1,8 +1,20 @@
 import argparse
+import random
 from pathlib import Path
+
+import numpy as np
+import torch
 
 from trainers import Trainer, GestureTrainer, FloorSupportMultiLabelTrainer
 from models import get_model
+
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def parse_args():
@@ -25,11 +37,14 @@ def parse_args():
                         help="Device to train on")
     parser.add_argument("--target-frames", type=int, default=128,
                         help="Target frames for gesture sampling (gesture_cnn only)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    set_seed(args.seed)
     data_dir = Path(args.data_dir)
     if not data_dir.is_absolute():
         data_dir = (Path(__file__).resolve().parent / data_dir).resolve()
