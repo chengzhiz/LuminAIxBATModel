@@ -79,10 +79,10 @@ class MultiLabelFloorModel(MultiLabelGestureModelBase):
         #   Group 0: FT vs HN  (body part)
         #   Group 1: S  vs D   (single/dual count)
         pair_groups = [(0, 1), (2, 3)]
-        # Weight D 4× — aggressively penalise false negatives.
-        # It's better to falsely say "dual feet" than to miss it.
+        # Weight D 1.5× — best F1 balance from sweep (1.0–3.0).
+        # FT+D=25%  FT+S=81%  HN+D=100% at the sweet spot.
         # Group positions: S=0, D=1 within logits[:, [2,3]]
-        pair_weights = [None, torch.tensor([1.0, 4.0])]
+        pair_weights = [None, torch.tensor([1.0, 1.5])]
         super().__init__(model, num_codes, target_frames, lr, weight_decay,
                         device, name, pair_groups=pair_groups,
                         pair_weights=pair_weights)
