@@ -8,6 +8,7 @@
 # Exported ONNX models (large binaries, deployed separately)
 *.onnx
 !to_alienware/Models/*.onnx
+!to_alienware2/*.onnx
 
 # BATRunner test output
 bat_result.csv

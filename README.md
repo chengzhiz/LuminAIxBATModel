@@ -4,6 +4,8 @@
 
 Classifies body movement into **BAT (Body Articulation Type)** codes across four regions: FloorSupport, Spine, LimbExpression, Space. All models use 73-dim plumbline features (COG-relative, scale-invariant) and output per-pair normalized probabilities. **0.5 threshold** for binary pairs, **argmax** for 3+ groups.
 
+> **Two accuracy metrics:** The table below reports **per-bit accuracy** (each code checked independently — partial credit). The confusion heatmaps show **exact match** (all codes must be correct for a sample to count). Per-bit is always higher. For example, if only the D bit is wrong on an FT+D sample, it scores 3/4 = 75% per-bit but 0% exact match.
+
 ## Design
 
 - **COG-relative features.** Plumbline distances/angles are invariant to body height and translation — no separate normalization needed.
