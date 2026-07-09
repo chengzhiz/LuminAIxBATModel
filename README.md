@@ -10,7 +10,7 @@ Classifies body movement into **BAT (Body Articulation Type)** codes across four
 
 - **COG-relative features.** Plumbline distances/angles are invariant to body height and translation — no separate normalization needed.
 - **Pair-group constraints.** Structurally enforced mutual exclusivity via per-group softmax + CrossEntropyLoss. No invalid combos possible.
-- **D-weight penalty.** FloorSupport weights D (dual-foot) 1.5× in the S↔D loss to balance false negatives (FT+D 25%, FT+S 90% on val).
+- **D-weight penalty.** FloorSupport weights D (dual-foot) 2.0× in the S↔D loss with a two-head attention architecture — one attention+classifier head for FT/HN, a separate one for S/D. This lets the S/D head focus on the frames where dual-foot contact is visible. FT+D improved from 25% → 69% (val) and 29% → 82% (test).
 - **Reproducible.** All `main.py` scripts accept `--seed` (default 42), setting `random`/`numpy`/`torch` seeds.
 - **Architecture tested per region.** BiLSTM+attention (FloorSupport), BiLSTM+mean pool+class weights (Spine, Space), CNN+contrastive heads (LimbExpression). Deeper classifiers and attention pooling overfit on small datasets (<300 samples).
 
@@ -24,24 +24,24 @@ Developed at the **Georgia Tech Expressive Machinery Lab** (LuminAI project). Gr
 
 | Combo | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| FT+D | 77 | 16 | 17 | **25%** | **29%** |
-| FT+S | 100 | 21 | 22 | **90%** | **95%** |
+| FT+D | 77 | 16 | 17 | **69%** | **82%** |
+| FT+S | 100 | 21 | 22 | **57%** | **64%** |
 | HN+D | 69 | 14 | 16 | **100%** | **94%** |
 | HN+S | 0 | 0 | 0 | — | — |
 
-> D-weight 1.5× balances S↔D. HN+S has no data.
+> Two-head attention + D-weight 2.0× balances S↔D. HN+S has no data.
 
 ## Spine — Spine Movement (6-class single-label)
 
 | Class | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| E (Extension) | 72 | 15 | 16 | **73%** | **75%** |
-| F (Flexion) | 87 | 18 | 20 | **61%** | **75%** |
-| HG (Hinge) | 84 | 18 | 19 | **83%** | **47%** |
+| E (Extension) | 72 | 15 | 16 | **80%** | **81%** |
+| F (Flexion) | 87 | 18 | 20 | **78%** | **90%** |
+| HG (Hinge) | 84 | 18 | 19 | **78%** | **68%** |
 | LF (Lat Flexion) | 40 | 8 | 10 | **50%** | **40%** |
 | SR, U | 0 | 0 | 0 | — | — |
 
-> Class weights (LF=1.8×, F=1.2×) + lr=5e-4. SR and U have no data. LF has only 40 samples.
+> Attention pooling + class weights (LF=3.0×, F=1.2×) + lr=5e-4, 80 epochs. Overall val acc 69.5% → 74.6%. SR and U have no data. LF has only 40 samples — more data needed.
 
 ## LimbExpression — Limb Patterns (8 codes, 4 binary pairs)
 
@@ -70,19 +70,14 @@ Movement `[ST, T, RV, SP]` × Energy `[H, M, L]` = 12 combos.
 
 ---
 
-## Confusion Matrices (Validation)
+## Confusion Matrices
 
-<img src="assets/heatmap_floorsupport.png" width="700" alt="FloorSupport">
-<img src="assets/heatmap_spine.png" width="700" alt="Spine">
-<img src="assets/heatmap_limbexpression.png" width="700" alt="LimbExpression">
-<img src="assets/heatmap_space.png" width="700" alt="Space">
-
-## Confusion Matrices (Test)
-
-<img src="assets/heatmap_floorsupport_test.png" width="700" alt="FloorSupport test">
-<img src="assets/heatmap_spine_test.png" width="700" alt="Spine test">
-<img src="assets/heatmap_limbexpression_test.png" width="700" alt="LimbExpression test">
-<img src="assets/heatmap_space_test.png" width="700" alt="Space test">
+| Region | Validation | Test |
+|:-------|:----------:|:----:|
+| **FloorSupport** | <img src="assets/heatmap_floorsupport.png" width="340"> | <img src="assets/heatmap_floorsupport_test.png" width="340"> |
+| **Spine** | <img src="assets/heatmap_spine.png" width="340"> | <img src="assets/heatmap_spine_test.png" width="340"> |
+| **LimbExpression** | <img src="assets/heatmap_limbexpression.png" width="340"> | <img src="assets/heatmap_limbexpression_test.png" width="340"> |
+| **Space** | <img src="assets/heatmap_space.png" width="340"> | <img src="assets/heatmap_space_test.png" width="340"> |
 
 ---
 

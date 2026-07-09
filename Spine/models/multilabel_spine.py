@@ -14,7 +14,12 @@ from typing import List
 
 
 class _SpineClassifier(nn.Module):
-    """Gesture-level single-label model.  Input: (B, 73, T) -> Output: (B, 6)."""
+    """Gesture-level single-label model.  Input: (B, 73, T) -> Output: (B, 6).
+
+    Uses attention pooling (instead of mean pooling) so the model can focus on
+    the most discriminative frames — e.g. the peak of a flexion vs the recovery.
+    Classifier kept shallow with LayerNorm to avoid overfitting on 283 samples.
+    """
     def __init__(self, in_features=73, num_classes=6, hidden=256, num_layers=2,
                  dropout=0.5):
         super().__init__()
@@ -22,14 +27,33 @@ class _SpineClassifier(nn.Module):
             in_features, hidden, num_layers,
             bidirectional=True, batch_first=True, dropout=dropout,
         )
+        lstm_out = hidden * 2  # 512
+
+        # ── Attention pooling — learn which frames matter ──────────────
+        self.attn = nn.Sequential(
+            nn.Linear(lstm_out, 64),
+            nn.Tanh(),
+            nn.Linear(64, 1),
+        )
+
+        # ── Classifier with LayerNorm (kept shallow to avoid overfitting) ─
         self.classifier = nn.Sequential(
-            nn.Linear(hidden * 2, 128), nn.ReLU(inplace=True),
-            nn.Dropout(dropout), nn.Linear(128, num_classes),
+            nn.Linear(lstm_out, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(128, num_classes),
         )
 
     def forward(self, x):
-        out, _ = self.lstm(x.permute(0, 2, 1))
-        return self.classifier(out.mean(dim=1))
+        out, _ = self.lstm(x.permute(0, 2, 1))   # (B, T, 512)
+
+        # Attention-weighted pooling
+        w = self.attn(out)                         # (B, T, 1)
+        w = torch.softmax(w, dim=1)                # normalise over time
+        pooled = (out * w).sum(dim=1)              # (B, 512)
+
+        return self.classifier(pooled)              # (B, 6)
 
 
 # ── Frame sampling ─────────────────────────────────────────────────
@@ -72,9 +96,9 @@ class MultiLabelSpineModel:
         self.model = _SpineClassifier(in_features=73, num_classes=num_classes,
                                        dropout=dropout).to(device)
 
-        # Class weights to help minority classes (LF=40, F=87, HG=84, E=72)
+        # Class weights to help minority classes (LF=40 samples, others 72-87)
         # Higher weight -> model penalised more for getting that class wrong
-        class_weight = torch.tensor([1.0, 1.2, 1.0, 1.8, 1.0, 1.0],
+        class_weight = torch.tensor([1.0, 1.2, 1.0, 3.0, 1.0, 1.0],
                                     dtype=torch.float32, device=device)
         self.criterion = nn.CrossEntropyLoss(weight=class_weight)
         self.optimizer = torch.optim.Adam(
