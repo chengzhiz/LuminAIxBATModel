@@ -10,9 +10,18 @@ Classifies body movement into **BAT (Body Articulation Type)** codes across four
 
 - **COG-relative features.** Plumbline distances/angles are invariant to body height and translation — no separate normalization needed.
 - **Pair-group constraints.** Structurally enforced mutual exclusivity via per-group softmax + CrossEntropyLoss. No invalid combos possible.
-- **D-weight penalty.** FloorSupport weights D (dual-foot) 2.0× in the S↔D loss with a two-head attention architecture — one attention+classifier head for FT/HN, a separate one for S/D. This lets the S/D head focus on the frames where dual-foot contact is visible. FT+D improved from 25% → 69% (val) and 29% → 82% (test).
+- **Multi-head decoding.** Each mutually exclusive code group gets its own attention + classifier head on a shared backbone. The heads decide independently, so the frames that matter for one decision (e.g. the brief moment of dual-foot contact) don't have to compete with the frames that matter for another (foot vs hand). This also allows zero-shot compositional predictions — e.g. HN+S (single hand) is a reachable output even with no HN+S training data.
+- **Attention pooling everywhere.** Attention beats mean pooling in every region — brief events (jumps, dual-foot contact) get washed out by averaging over 256 frames. Deep classifiers overfit on small datasets (<300 samples); shallow heads with LayerNorm work best.
 - **Reproducible.** All `main.py` scripts accept `--seed` (default 42), setting `random`/`numpy`/`torch` seeds.
-- **Architecture tested per region.** BiLSTM+attention (FloorSupport), BiLSTM+mean pool+class weights (Spine, Space), CNN+contrastive heads (LimbExpression). Deeper classifiers and attention pooling overfit on small datasets (<300 samples).
+
+### Model Structures
+
+| Region | Backbone | Pooling | Heads | Loss / Weights |
+|:-------|:---------|:--------|:------|:---------------|
+| **FloorSupport** | BiLSTM (73→256×2, 2 layers) | Per-head attention | **2 heads**: FT↔HN, S↔D (each: attn → Linear→LayerNorm→ReLU→Dropout→2) | CE per group; D weighted 2.0× (FT+D: 25%→69% val, 29%→82% test) |
+| **Spine** | BiLSTM (73→256×2, 2 layers) | Single attention | **1 head**: 6-way softmax E/F/HG/LF/SR/U (single-label — one class per sample, nothing to split) | CE; class weights LF=3.0×, F=1.2× |
+| **LimbExpression** | 1D CNN (73→128→256→512) | AdaptiveAvgPool | **4 heads**: LB↔UB, SL↔DL, AS↔SY, A↔G (each: Linear→ReLU→Dropout→1 sigmoid) | BCE per head |
+| **Space** | BiLSTM (73→256×2, 2 layers) | Per-head attention | **2 heads**: movement ST/T/RV/SP (4-way), energy H/M/L (3-way) | CE per group; ST weighted 1.8× (ST+H: 43%→71% val, 20%→73% test) |
 
 ## BAT Origins
 
@@ -61,12 +70,12 @@ Movement `[ST, T, RV, SP]` × Energy `[H, M, L]` = 12 combos.
 
 | Combo | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| RV+H | 77 | 16 | 18 | **88%** | **83%** |
-| SP+H | 95 | 20 | 22 | **65%** | **50%** |
-| ST+H | 65 | 14 | 15 | **43%** | **20%** |
+| RV+H | 77 | 16 | 18 | **88%** | **94%** |
+| SP+H | 95 | 20 | 22 | **95%** | **95%** |
+| ST+H | 65 | 14 | 15 | **71%** | **73%** |
 | All M, L, T combos (9) | 0 | 0 | 0 | — | — |
 
-> 9/12 combos missing. No Medium/Low energy, no Transition movement.
+> Two-head attention (movement/energy) + ST-weight 1.8×. Attention pooling fixed the ST↔SP confusion (jumps are brief events that mean pooling washed out): ST+H 43% → 71% (val), 20% → 73% (test); SP+H 65% → 95% (val), 50% → 95% (test). 9/12 combos missing — no Medium/Low energy, no Transition movement.
 
 ---
 
