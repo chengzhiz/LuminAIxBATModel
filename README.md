@@ -24,8 +24,8 @@ Developed at the **Georgia Tech Expressive Machinery Lab** (LuminAI project). Gr
 
 | Combo | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| FT+D | 77 | 16 | 17 | **25%** | **82%** |
-| FT+S | 100 | 21 | 22 | **90%** | **18%** |
+| FT+D | 77 | 16 | 17 | **25%** | **29%** |
+| FT+S | 100 | 21 | 22 | **90%** | **95%** |
 | HN+D | 69 | 14 | 16 | **100%** | **94%** |
 | HN+S | 0 | 0 | 0 | — | — |
 
@@ -47,7 +47,7 @@ Developed at the **Georgia Tech Expressive Machinery Lab** (LuminAI project). Gr
 
 | Combo | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| LB+DL+SY+G | 79 | 16 | 18 | **100%** | **94%** |
+| LB+G+DL+SY | 79 | 16 | 18 | **100%** | **94%** |
 | LB+SL+AS+A | 67 | 14 | 15 | **93%** | **80%** |
 | LB+SL+AS+G | 81 | 17 | 19 | **71%** | **74%** |
 | All UB combos (8) | 0 | 0 | 0 | — | — |
@@ -61,9 +61,9 @@ Movement `[ST, T, RV, SP]` × Energy `[H, M, L]` = 12 combos.
 
 | Combo | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| H+RV | 77 | 16 | 18 | **88%** | **83%** |
-| H+SP | 95 | 20 | 22 | **65%** | **50%** |
-| H+ST | 65 | 14 | 15 | **43%** | **20%** |
+| RV+H | 77 | 16 | 18 | **88%** | **83%** |
+| SP+H | 95 | 20 | 22 | **65%** | **50%** |
+| ST+H | 65 | 14 | 15 | **43%** | **20%** |
 | All M, L, T combos (9) | 0 | 0 | 0 | — | — |
 
 > 9/12 combos missing. No Medium/Low energy, no Transition movement.

@@ -29,6 +29,16 @@ def bits_to_label(bits, codes):
     return "+".join(active) if active else "∅"
 
 
+def _filter_nonempty(cm, labels):
+    """Remove rows (and corresponding columns) with zero samples.
+
+    Returns (filtered_cm, filtered_labels).  Labels whose row has at
+    least one sample are kept; the rest are dropped.
+    """
+    keep = cm.sum(axis=1) > 0
+    return cm[keep][:, keep], [l for l, k in zip(labels, keep) if k]
+
+
 def _find_latest_checkpoint(ckpt_dir, pattern="*.pt"):
     pts = sorted(Path(ckpt_dir).glob(pattern))
     if not pts:
@@ -101,14 +111,6 @@ def draw_heatmap(cm, row_labels, col_labels, title, out_path,
                                  facecolor="none", zorder=10)
             ax.add_patch(rect)
 
-    # Gray out empty rows
-    for i in range(n_rows):
-        if cm[i].sum() == 0:
-            rect = plt.Rectangle((i - 0.5, i - 0.5), n_cols, 1,
-                                 linewidth=0, edgecolor="none",
-                                 facecolor="#eeeeee", alpha=0.5, zorder=5)
-            ax.add_patch(rect)
-
     exact = np.trace(cm) / cm.sum() * 100 if cm.sum() > 0 else 0
     ax.set_title(title, fontsize=13, fontweight="bold", pad=15)
 
@@ -127,7 +129,7 @@ def draw_heatmap(cm, row_labels, col_labels, title, out_path,
 # FloorSupport
 # ═══════════════════════════════════════════════════════════════════════════
 
-def heatmap_floorsupport():
+def heatmap_floorsupport(split="val"):
     sys.path.insert(0, str(PROJECT_ROOT / "FloorSupport"))
     from FloorSupport.models.multilabel_floor import MultiLabelFloorModel
     from FloorSupport.trainers import FloorSupportMultiLabelTrainer
@@ -138,9 +140,7 @@ def heatmap_floorsupport():
     )
     DATA_DIR = PROJECT_ROOT / "FloorSupport/dataset/floor_support_raw"
 
-    print(f"\n{'='*60}")
-    print(f"  FloorSupport  —  {CKPT.name}")
-    print(f"{'='*60}")
+    split_label = "test" if split == "test" else "validation"
 
     model = MultiLabelFloorModel(num_codes=4, target_frames=256, device="cpu")
     ckpt = torch.load(str(CKPT), map_location="cpu", weights_only=False)
@@ -150,11 +150,14 @@ def heatmap_floorsupport():
     trainer = FloorSupportMultiLabelTrainer(
         model=model, data_dir=str(DATA_DIR), epochs=1
     )
-    val_gestures = trainer._load_gestures("val")
-    print(f"  {len(val_gestures)} validation gestures")
+    gestures = trainer._load_gestures(split)
+    print(f"\n{'='*60}")
+    print(f"  FloorSupport ({split_label})  —  {CKPT.name}")
+    print(f"{'='*60}")
+    print(f"  {len(gestures)} {split_label} gestures")
 
     all_probs, all_truths = [], []
-    for features, label in val_gestures:
+    for features, label in gestures:
         probs = model.predict_proba([(features, label)])[0]
         all_probs.append(probs)
         all_truths.append(label)
@@ -182,14 +185,18 @@ def heatmap_floorsupport():
         else:
             print(f"  {c:>8s}: (no samples)")
 
+    # Only show categories that have data
+    cm_filt, combos_filt = _filter_nonempty(cm, all_combos)
+
     exact = (all_preds == all_truths).all(axis=1).mean()
     N = len(all_probs)
+    out_name = f"heatmap_floorsupport.png" if split == "val" else f"heatmap_floorsupport_test.png"
     draw_heatmap(
-        cm, all_combos, all_combos,
-        f"FloorSupport — True vs Predicted\n"
-        f"{N} samples  •  4 valid combos (pair-group constrained)  •  "
+        cm_filt, combos_filt, combos_filt,
+        f"FloorSupport ({split_label}) — True vs Predicted\n"
+        f"{N} samples  •  {len(combos_filt)}/{len(all_combos)} combos  •  "
         f"exact match: {exact:.1%}",
-        "assets/heatmap_floorsupport.png"
+        f"assets/{out_name}"
     )
 
 
@@ -197,7 +204,7 @@ def heatmap_floorsupport():
 # Spine  (single-label 6-class softmax)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def heatmap_spine():
+def heatmap_spine(split="val"):
     sys.path.insert(0, str(PROJECT_ROOT / "Spine"))
     from Spine.models.multilabel_spine import MultiLabelSpineModel
     from Spine.trainers import parse_spine_label
@@ -208,23 +215,21 @@ def heatmap_spine():
     )
     DATA_DIR = PROJECT_ROOT / "Spine/dataset/spine_raw"
 
-    print(f"\n{'='*60}")
-    print(f"  Spine  —  {CKPT.name}")
-    print(f"{'='*60}")
+    split_label = "test" if split == "test" else "validation"
 
     model = MultiLabelSpineModel(num_classes=6, target_frames=256, device="cpu")
     ckpt = torch.load(str(CKPT), map_location="cpu", weights_only=False)
     model.model.load_state_dict(ckpt["model_state_dict"])
     model.model.eval()
 
-    # Load val data
+    # Load data
     from plumbline_features import load_plumbline_features_from_json
     from FloorSupport.models._gesture_base import sample_frames
 
-    val_dir = DATA_DIR / "val"
+    data_dir_split = DATA_DIR / split
     gestures = []
-    if val_dir.exists():
-        for class_dir in sorted(val_dir.iterdir()):
+    if data_dir_split.exists():
+        for class_dir in sorted(data_dir_split.iterdir()):
             if not class_dir.is_dir():
                 continue
             label = parse_spine_label(class_dir.name)
@@ -233,7 +238,10 @@ def heatmap_spine():
                 if feats:
                     gestures.append((feats, label))
 
-    print(f"  {len(gestures)} validation gestures")
+    print(f"\n{'='*60}")
+    print(f"  Spine ({split_label})  —  {CKPT.name}")
+    print(f"{'='*60}")
+    print(f"  {len(gestures)} {split_label} gestures")
 
     X = np.stack([sample_frames(feats, 256) for feats, _ in gestures], axis=0)
     trues = np.array([label for _, label in gestures], dtype=np.int64)
@@ -253,14 +261,20 @@ def heatmap_spine():
         correct = cm[i, i]
         if total > 0:
             print(f"  {c:>6s}: {correct}/{total} correct ({correct/total:.0%})")
+        else:
+            print(f"  {c:>6s}: (no samples)")
 
+    # Only show classes that have data
+    cm_filt, codes_filt = _filter_nonempty(cm, CODES)
+
+    out_name = f"heatmap_spine.png" if split == "val" else f"heatmap_spine_test.png"
     overall = (preds == trues).mean()
     draw_heatmap(
-        cm, CODES, CODES,
-        f"Spine — True vs Predicted\n"
-        f"{len(gestures)} samples  •  {n_classes} classes  •  "
+        cm_filt, codes_filt, codes_filt,
+        f"Spine ({split_label}) — True vs Predicted\n"
+        f"{len(gestures)} samples  •  {len(codes_filt)}/{n_classes} classes  •  "
         f"accuracy: {overall:.1%}",
-        "assets/heatmap_spine.png",
+        f"assets/{out_name}",
         single_label=True
     )
 
@@ -269,7 +283,7 @@ def heatmap_spine():
 # LimbExpression  (8-code multi-label via 4-head expand)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def heatmap_limb():
+def heatmap_limb(split="val"):
     sys.path.insert(0, str(PROJECT_ROOT / "LimbExpression"))
     from LimbExpression.models.multilabel_cnn import MultiLabelCNN, parse_attributes
 
@@ -279,9 +293,7 @@ def heatmap_limb():
     )
     DATA_DIR = PROJECT_ROOT / "LimbExpression/dataset/limb_expression_raw"
 
-    print(f"\n{'='*60}")
-    print(f"  LimbExpression  —  {CKPT.name}")
-    print(f"{'='*60}")
+    split_label = "test" if split == "test" else "validation"
 
     model = MultiLabelCNN(num_heads=4, target_frames=128, device="cpu")
     ckpt = torch.load(str(CKPT), map_location="cpu", weights_only=False)
@@ -291,10 +303,10 @@ def heatmap_limb():
     from plumbline_features import load_plumbline_features_from_json
     from FloorSupport.models._gesture_base import sample_frames
 
-    val_dir = DATA_DIR / "val"
+    data_dir_split = DATA_DIR / split
     gestures = []
-    if val_dir.exists():
-        for class_dir in sorted(val_dir.iterdir()):
+    if data_dir_split.exists():
+        for class_dir in sorted(data_dir_split.iterdir()):
             if not class_dir.is_dir():
                 continue
             label = parse_attributes(class_dir.name)
@@ -303,7 +315,10 @@ def heatmap_limb():
                 if feats:
                     gestures.append((feats, label))
 
-    print(f"  {len(gestures)} validation gestures")
+    print(f"\n{'='*60}")
+    print(f"  LimbExpression ({split_label})  —  {CKPT.name}")
+    print(f"{'='*60}")
+    print(f"  {len(gestures)} {split_label} gestures")
 
     X = np.stack([sample_frames(feats, 128) for feats, _ in gestures], axis=0)
     trues_4 = np.array([label for _, label in gestures], dtype=np.float32)
@@ -385,14 +400,20 @@ def heatmap_limb():
         correct = cm[i, i]
         if total > 0:
             print(f"  {c:>12s}: {correct}/{total} correct ({correct/total:.0%})")
+        else:
+            print(f"  {c:>12s}: (no samples)")
 
+    # Only show combos that have data
+    cm_filt, combos_filt = _filter_nonempty(cm, all_combos)
+
+    out_name = f"heatmap_limbexpression.png" if split == "val" else f"heatmap_limbexpression_test.png"
     exact = (preds_8 == trues_8).all(axis=1).mean()
     draw_heatmap(
-        cm, all_combos, all_combos,
-        f"LimbExpression — True vs Predicted\n"
-        f"{len(gestures)} samples  •  {n_combos} combos  •  "
+        cm_filt, combos_filt, combos_filt,
+        f"LimbExpression ({split_label}) — True vs Predicted\n"
+        f"{len(gestures)} samples  •  {len(combos_filt)}/{n_combos} combos  •  "
         f"exact match: {exact:.1%}",
-        "assets/heatmap_limbexpression.png"
+        f"assets/{out_name}"
     )
 
 
@@ -400,7 +421,7 @@ def heatmap_limb():
 # Space  (7-code multi-label with pair groups)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def heatmap_space():
+def heatmap_space(split="val"):
     """Confusion heatmap for Space — 7 codes, 2 pair groups, 12 valid combos.
 
     Movement group (indices 0-3): ST, T, RV, SP  (4-way softmax)
@@ -417,9 +438,7 @@ def heatmap_space():
     )
     DATA_DIR = PROJECT_ROOT / "Space/dataset/space_raw"
 
-    print(f"\n{'='*60}")
-    print(f"  Space  —  {CKPT.name}")
-    print(f"{'='*60}")
+    split_label = "test" if split == "test" else "validation"
 
     model = MultiLabelSpaceModel(num_codes=7, target_frames=256, device="cpu")
     ckpt = torch.load(str(CKPT), map_location="cpu", weights_only=False)
@@ -429,10 +448,10 @@ def heatmap_space():
     from plumbline_features import load_plumbline_features_from_json
     from FloorSupport.models._gesture_base import sample_frames
 
-    val_dir = DATA_DIR / "val"
+    data_dir_split = DATA_DIR / split
     gestures = []
-    if val_dir.exists():
-        for class_dir in sorted(val_dir.iterdir()):
+    if data_dir_split.exists():
+        for class_dir in sorted(data_dir_split.iterdir()):
             if not class_dir.is_dir():
                 continue
             label = parse_space_label(class_dir.name)
@@ -441,7 +460,10 @@ def heatmap_space():
                 if feats:
                     gestures.append((feats, label))
 
-    print(f"  {len(gestures)} validation gestures")
+    print(f"\n{'='*60}")
+    print(f"  Space ({split_label})  —  {CKPT.name}")
+    print(f"{'='*60}")
+    print(f"  {len(gestures)} {split_label} gestures")
 
     X = np.stack([sample_frames(feats, 256) for feats, _ in gestures], axis=0)
     trues = np.array([label for _, label in gestures], dtype=np.float32)
@@ -482,13 +504,17 @@ def heatmap_space():
         else:
             print(f"  {c:>8s}: (no samples)")
 
+    # Only show combos that have data
+    cm_filt, combos_filt = _filter_nonempty(cm, all_combos)
+
+    out_name = f"heatmap_space.png" if split == "val" else f"heatmap_space_test.png"
     exact = (preds == trues).all(axis=1).mean()
     draw_heatmap(
-        cm, all_combos, all_combos,
-        f"Space — True vs Predicted\n"
-        f"{len(gestures)} samples  •  {n_combos} valid combos (4 mvmt x 3 energy)  •  "
+        cm_filt, combos_filt, combos_filt,
+        f"Space ({split_label}) — True vs Predicted\n"
+        f"{len(gestures)} samples  •  {len(combos_filt)}/{n_combos} combos  •  "
         f"exact match: {exact:.1%}",
-        "assets/heatmap_space.png"
+        f"assets/{out_name}"
     )
 
 
@@ -497,14 +523,15 @@ def heatmap_space():
 # ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    for func in [heatmap_floorsupport, heatmap_spine, heatmap_limb, heatmap_space]:
-        try:
-            func()
-        except FileNotFoundError as e:
-            print(f"  ⚠  Skipping: {e}")
-        except Exception as e:
-            print(f"  ✗  Error: {e}")
-            import traceback
-            traceback.print_exc()
+    for split in ["val", "test"]:
+        for func in [heatmap_floorsupport, heatmap_spine, heatmap_limb, heatmap_space]:
+            try:
+                func(split)
+            except FileNotFoundError as e:
+                print(f"  ⚠  Skipping: {e}")
+            except Exception as e:
+                print(f"  ✗  Error: {e}")
+                import traceback
+                traceback.print_exc()
 
     print(f"\nAll heatmaps saved to assets/")
