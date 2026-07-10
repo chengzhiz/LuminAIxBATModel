@@ -2,6 +2,80 @@
 
 <img src="assets/BAT.png" width="600" alt="BAT codes">
 
+## BAT 🦇 Code Definitions
+
+### Floor Support <sub>(Atlas color: BLUE)</sub>
+
+The primary segment responsible for bearing weight — generally, what body part is touching the floor.
+
+| Code | Name | Definition |
+|:----:|:-----|:-----------|
+| D | Dual | Utilizing symmetrical body parts such as two feet or two elbows for support |
+| S | Single | Utilizing one body part for support such as one hand, knee, etc. |
+| FT | Feet | Only the foot/feet are touching the ground |
+| LG | Leg | The leg (non-foot) is supporting weight, such as shins on the ground |
+| UL | Upper Leg | Above the knee to below the hip supports weight |
+| LL | Lower Leg | Below the knee to above the foot supports weight |
+| K | Knee | Knee supports weight |
+| HN | Hand | Utilizing hand/hands to support or transfer weight, such as in a cartwheel |
+| AR | Arm | Utilizing the arm (non-hand) to support weight, such as in a forearm handstand |
+| UA | Upper Arm | The arm from above the elbow to below the shoulder supports weight |
+| LA | Lower Arm | The arm from below the elbow to above the hand supports weight |
+| EL | Elbow | The elbow supports weight |
+| TR | Torso | The entire front and back of the trunk between the neck and above the upper legs — including shoulders, back, chest, stomach, pelvis, hips, and buttocks |
+| FR | Front Torso | The front body of the entire torso/trunk |
+| UF | Upper Front | Chest and ribcage support weight |
+| LN | Lower Front | Lower stomach and front of pelvis support weight |
+| SH | Front Shoulder | The front of the shoulders support weight |
+| BK | Back Torso | The back body of the entire torso/trunk |
+| UA | Upper Back | Cervical and thoracic spine |
+| LK | Lower Back | Lumbar through tailbone/butt |
+| SH | Back Shoulder | The back of the shoulders support weight |
+
+### Location of Spine <sub>(Atlas color: GREEN)</sub>
+
+Position and alignment of the spine (cervical to lumbar spine).
+
+| Code | Name | Definition |
+|:----:|:-----|:-----------|
+| F | Flexion | Movement of the spine forward, as if curling into a ball — moving the body closer to the ground or towards a central point, contracting towards the center of space |
+| E | Extension | Movement of the spine backward, as if arching the back — moving the body away from the ground or towards the periphery of space, expanding outward |
+| LF | Lateral Flexion | Bending of the spine to one side, as if reaching for something on the ground or the sky — moving the body laterally in space |
+| SR | Spine Rotation | Twisting of the spine to either side, as if looking over one shoulder — changing the orientation of the body relative to the environment |
+| HG | Hinge | Creasing forward at the hip while maintaining a neutral spine |
+| U | Undulation | Multiple spine actions occurring in a continuous, sequential motion |
+
+### Limb Expression <sub>(Atlas color: ORANGE)</sub>
+
+Intentional movement created by upper and lower limb(s).
+
+| Code | Name | Definition |
+|:----:|:-----|:-----------|
+| LB | Lower Body | Utilizes body parts below the hip |
+| UB | Upper Body | Utilizes body parts above the hip |
+| DL | Dual Limbs | Utilizes both limbs |
+| SL | Single Limb | Intentionally utilizes only one limb while the other limb is in a passive position |
+| SY | Symmetrical | One limb is intentionally doing exactly what the other limb is doing |
+| AS | Asymmetrical | Two corresponding limbs are intentionally doing the opposite of one another |
+| A | Active Limb (in the air) | Any intentional limb motion not touching the ground — e.g. port de bras, leg extensions |
+| G | Active Limb (on the ground) | Any intentional limb motion touching the ground — e.g. rond de jambe of arm or leg |
+
+### Space <sub>(Atlas color: RED)</sub>
+
+Vertical levels and movement through space.
+
+| Code | Name | Definition |
+|:----:|:-----|:-----------|
+| H | High | The highest level of space — feet, heels, and toes distinctly off the floor, e.g. relevés (demi-pointe), jumps, leaps |
+| M | Medium | The medium level of space — standing zone or standard anatomical positioning (vertically stacked) with feet flat on the floor |
+| L | Low | The lowest level of space — shoulders equal to or below standing hip height, or any time knees touch the floor; e.g. any floor movement |
+| ST | Stationary | Includes weight shifts before change of support |
+| T | Travel | Horizontal shift in space — moves beyond change of support |
+| RV | Revolution (Turning) | Rotation equal to or more than 180 degrees |
+| SP | Spring | Upward level change causing both feet to leave the floor |
+
+---
+
 Classifies body movement into **BAT (Body Articulation Type)** codes across four regions: FloorSupport, Spine, LimbExpression, Space. All models use 73-dim plumbline features (COG-relative, scale-invariant) and output per-pair normalized probabilities. **0.5 threshold** for binary pairs, **argmax** for 3+ groups.
 
 > **Two accuracy metrics:** The table below reports **per-bit accuracy** (each code checked independently — partial credit). The confusion heatmaps show **exact match** (all codes must be correct for a sample to count). Per-bit is always higher. For example, if only the D bit is wrong on an FT+D sample, it scores 3/4 = 75% per-bit but 0% exact match.
@@ -90,9 +164,66 @@ Movement `[ST, T, RV, SP]` × Energy `[H, M, L]` = 12 combos.
 
 ---
 
+## Tools
+
+### Skeleton Viewer (`skeleton_viewer.html`)
+
+A self-contained 3D motion viewer — just **open the file in a browser** (double-click; no server needed, but internet is required on first load for the Three.js CDN).
+
+**Loading recordings:**
+- **Load JSON** button — pick a single motion `.json` file
+- **Drag & drop** a `.json` anywhere onto the window
+- **Load Folder / 📁 Open** — load a whole directory recursively; files appear in a sidebar tree (toggle with **☰ Files**), first file auto-loads
+
+**Controls:**
+
+| Action | Control |
+|:---|:---|
+| Play / pause | `Space` or ▶ button |
+| Playback speed | slider — 10 / 30 / 60 fps |
+| Scrub frames | Frame slider, or `←` / `→` for single steps |
+| Prev / next file in folder | `↑` / `↓` (or PageUp / PageDown) |
+| Rotate / zoom / pan camera | drag / scroll / right-drag |
+| Recenter on skeleton | `F` or `R` |
+
+Displays a color-coded skeleton (green = spine, blue = arms, orange = legs, red = feet), a floor grid, an estimated floor plane at the lowest foot position, and an info panel showing the file's BAT flags, centroid, and skeleton height.
+
+### Evaluation Scripts
+
+**`evaluate_per_code.py`** — per-code recall, confusion matrices, and error breakdowns for all regions:
+
+```bash
+python evaluate_per_code.py [--region FloorSupport Spine LimbExpression Space] [--device cpu|cuda] [--plot]
+```
+
+| Argument | Default | Description |
+|:---|:---|:---|
+| `--region` | `all` | Which region(s) to evaluate — any subset of `FloorSupport`, `Spine`, `LimbExpression`, `Space` |
+| `--device` | `cpu` | Torch device for inference |
+| `--plot` | off | Also save visualization dashboards (PNG, 150 dpi) |
+
+**`heatmap_all_models.py`** — regenerates all 8 confusion heatmaps shown above (no arguments):
+
+```bash
+python heatmap_all_models.py
+```
+
+Runs all four regions on both the **val** and **test** splits, finds each region's best checkpoint automatically, and writes `heatmap_<region>.png` (val) and `heatmap_<region>_test.png` (test) to `assets/` at 200 dpi. Regions with a missing checkpoint or dataset are skipped with a warning.
+
+---
+
+## Current Barriers
+
+1. **Wrong data labels.** Some recordings are labeled incorrectly — e.g. the sample below is labeled Extension (E) but is actually forward-leaning (F) from frame ~90 onward. Label noise like this caps the achievable accuracy no matter the architecture: the model gets penalized for predicting the *true* movement.
+
+   <img src="assets/wrong_data_labels.png" width="500" alt="Wrong label example — labeled E but forward-leaning F from frame 90">
+
+2. **Open question — label semantics.** Does one label mean the movement is that code *most* of the time, or *all* of the time? A recording that starts neutral and bends forward at frame 90 is ambiguous under "most of the time" semantics. This needs a labeling convention decision before re-annotation.
+
 ## Future Work
 
-- **Data augmentation:** time warping, left-right mirroring, Gaussian noise, frame dropout.
+- **Cross-label existing recordings.** Every recording already contains movement in all four regions — a session recorded for FloorSupport can also be labeled for Spine, LimbExpression, and Space. This could fill missing categories (SR/U, UB combos, M/L/T) without new capture sessions.
+- **Data augmentation:** time warping, left-right mirroring, Gaussian noise, frame dropout. *(Tested on Spine: temporal jitter + noise + frame dropout gave 71.2% vs 74.6% baseline — augmentation can't fix label noise; clean labels first.)*
 - **AI-generated data:** motion diffusion models conditioned on missing combos → human expert labels → training set.
 - **More data needed:** HN+S (FloorSupport), SR/U (Spine), all UB combos (LimbExpression), M/L/T combos (Space).
 

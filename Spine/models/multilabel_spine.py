@@ -57,7 +57,9 @@ class _SpineClassifier(nn.Module):
 
 
 # ── Frame sampling ─────────────────────────────────────────────────
-def sample_frames(features_list, target_len):
+def sample_frames(features_list, target_len, jitter=False):
+    """Uniformly sample target_len frames.  With jitter=True, sampling
+    positions are randomly perturbed (training-time augmentation)."""
     T = len(features_list)
     arr = np.array(features_list, dtype=np.float32)
     if T == 0:
@@ -66,14 +68,34 @@ def sample_frames(features_list, target_len):
     if T < target_len:
         arr = np.concatenate([arr, np.tile(arr[-1:], (target_len - T, 1))], axis=0)
         return arr
+    if jitter:
+        base = np.linspace(0, T - 1, target_len)
+        base = base + np.random.uniform(-0.5, 0.5, target_len) * (T - 1) / target_len
+        return arr[np.clip(np.round(base).astype(int), 0, T - 1)]
     return arr[np.linspace(0, T - 1, target_len, dtype=int)]
 
 
-def _make_tensors(data, target_frames, device):
-    X = np.stack([sample_frames(feats, target_frames) for feats, _ in data], axis=0)
+def _make_tensors(data, target_frames, device, augment=False):
+    """Convert gestures → tensors.  augment=True adds training-time
+    augmentation: temporal jitter, Gaussian noise, and frame dropout —
+    effective regularisers for small datasets (<300 samples)."""
+    X = np.stack(
+        [sample_frames(feats, target_frames, jitter=augment) for feats, _ in data],
+        axis=0,
+    )
     y = np.array([label for _, label in data], dtype=np.int64)
     X = torch.tensor(X, dtype=torch.float32, device=device).permute(0, 2, 1)
     y = torch.tensor(y, dtype=torch.long, device=device)
+
+    if augment:
+        # Gaussian noise — 2 % of global feature std
+        X = X + torch.randn_like(X) * (0.02 * X.std())
+        # Frame dropout — replace ~5 % of frames with their predecessor
+        B, C, T = X.shape
+        drop = (torch.rand(B, 1, T, device=X.device) < 0.05)
+        X_prev = torch.cat([X[:, :, :1], X[:, :, :-1]], dim=2)
+        X = torch.where(drop, X_prev, X)
+
     return X, y
 
 
@@ -110,6 +132,8 @@ class MultiLabelSpineModel:
 
     def train(self, train_data, val_data=None, epoch=0, total_epochs=0):
         self.model.train()
+        # augment=False — tested jitter+noise+frame-dropout: 71.2% vs 74.6%
+        # baseline.  Augmentation amplifies label noise; fix labels first.
         X, y = _make_tensors(train_data, self.target_frames, self.device)
         loader = torch.utils.data.DataLoader(
             torch.utils.data.TensorDataset(X, y), batch_size=16, shuffle=True
