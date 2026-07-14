@@ -118,25 +118,31 @@ Developed at the **Georgia Tech Expressive Machinery Lab** (LuminAI project). Gr
 
 | Class | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| E (Extension) | 72 | 15 | 16 | **80%** | **81%** |
-| F (Flexion) | 87 | 18 | 20 | **78%** | **90%** |
-| HG (Hinge) | 84 | 18 | 19 | **78%** | **68%** |
-| LF (Lat Flexion) | 40 | 8 | 10 | **50%** | **40%** |
-| SR, U | 0 | 0 | 0 | — | — |
+| E (Extension) | 72 | 15 | 16 | **87%** | **88%** |
+| F (Flexion) | 87 | 18 | 20 | **78%** | **95%** |
+| HG (Hinge) | 84 | 18 | 19 | **72%** | **47%** |
+| LF (Lat Flexion) | 40 | 8 | 10 | **38%** | **50%** |
+| SR (Spine Rotation) 🆕 | 51 | 11 | 12 | **100%** | **100%** |
+| U (Undulation) 🆕 | 60 | 12 | 14 | **100%** | **93%** |
 
-> Attention pooling + class weights (LF=3.0×, F=1.2×) + lr=5e-4, 80 epochs. Overall val acc 69.5% → 74.6%. SR and U have no data. LF has only 40 samples — more data needed.
+> All 6 classes now have data (SR/U added from spine_downloaded). Attention pooling + class weights (LF=3.0×, F=1.2×) + lr=5e-4, 80 epochs. Re-trained 2026-07-13: overall val acc 78.1% → 80.5% (test 79.1%). LF still weakest (40 samples) — F↔HG confusion and suspected wrong labels remain the main barriers.
 
 ## LimbExpression — Limb Patterns (8 codes, 4 binary pairs)
 
 | Combo | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| LB+G+DL+SY | 79 | 16 | 18 | **100%** | **94%** |
-| LB+SL+AS+A | 67 | 14 | 15 | **93%** | **80%** |
-| LB+SL+AS+G | 81 | 17 | 19 | **71%** | **74%** |
-| All UB combos (8) | 0 | 0 | 0 | — | — |
-| Other 5 combos | 0 | 0 | 0 | — | — |
+| LB+G+DL+SY | 61 | 9 | 13 | **100%** | **96%** |
+| UB+G+DL+SY 🆕 | 41 | 11 | 11 | **96%** | **96%** |
+| LB+SL+AS+A | 67 | 14 | 15 | **100%** | **95%** |
+| LB+SL+AS+G | 81 | 17 | 19 | **93%** | **88%** |
+| UB+DL+AS+A 🆕 | 58 | 12 | 13 | **100%** | **94%** |
+| UB+DL+AS+G 🆕 | 35 | 7 | 9 | **93%** | **97%** |
+| UB+DL+SY+A 🆕 | 58 | 12 | 13 | **98%** | **98%** |
+| UB+SL+AS+A 🆕 | 58 | 12 | 14 | **100%** | **100%** |
+| UB+SL+AS+G 🆕 | 32 | 6 | 8 | **79%** | **84%** |
+| Other 7 combos | 0 | 0 | 0 | — | — |
 
-> Only 3/16 combos have data. All UpperBody combos missing.
+> 🆕 = data added 2026-07-13. Re-trained on the expanded 9-combo dataset (491 train gestures, up from 227): best per-bit val acc **96.2%**. Five brand-new UpperBody combos were split in, and UB+G+DL+SY grew from 30 to 63 recordings. UB+SL+AS+G is the weakest (only 46 recordings). 9/16 combos now have data.
 
 ## Space — Spatial/Energy (7 codes, 2 pair groups)
 
@@ -144,12 +150,14 @@ Movement `[ST, T, RV, SP]` × Energy `[H, M, L]` = 12 combos.
 
 | Combo | Train | Val | Test | Val Acc | Test Acc |
 |-------|------:|----:|-----:|--------:|---------:|
-| RV+H | 77 | 16 | 18 | **88%** | **94%** |
-| SP+H | 95 | 20 | 22 | **95%** | **95%** |
-| ST+H | 65 | 14 | 15 | **71%** | **73%** |
-| All M, L, T combos (9) | 0 | 0 | 0 | — | — |
+| RV+H | 77 | 16 | 18 | **96%** | **97%** |
+| RV+M 🆕 | 58 | 12 | 14 | **98%** | **94%** |
+| SP+H | 95 | 20 | 22 | **96%** | **95%** |
+| ST+H | 65 | 14 | 15 | **98%** | **92%** |
+| ST+M 🆕 | 72 | 15 | 16 | **98%** | **95%** |
+| All L, T combos + SP+M (7) | 0 | 0 | 0 | — | — |
 
-> Two-head attention (movement/energy) + ST-weight 1.8×. Attention pooling fixed the ST↔SP confusion (jumps are brief events that mean pooling washed out): ST+H 43% → 71% (val), 20% → 73% (test); SP+H 65% → 95% (val), 50% → 95% (test). 9/12 combos missing — no Medium/Low energy, no Transition movement.
+> First Medium-energy data added (M-ST, M-RV) — the 3-way energy head is finally trainable. Two-head attention (movement/energy) + M-weight 1.5× (H=237 vs M=130 train samples). Re-trained 2026-07-13: best per-bit val acc 97.0%. Remaining gaps: Low energy, Transition movement, SP+M.
 
 ---
 
@@ -212,6 +220,22 @@ Runs all four regions on both the **val** and **test** splits, finds each region
 
 ---
 
+## Data Loss Notes
+
+The `limb_expression_downloaded` folder was replaced with a fresh download on **2026-07-13**. Two things were lost in the swap:
+
+1. **Original mocap recordings for LB+SL+AS+A and LB+SL+AS+G survive only in `limb_expression_raw`.** The old download contained 96 (LB+SL+AS+A) and 117 (LB+SL+AS+G) original `bodyFrames` recordings; the new download covers only 61 and 76 of them, and only in pre-computed feature form. The full original-format sets now exist **only** as the copies in `limb_expression_raw/` — do not delete or regenerate that folder from scratch, or 35 + 41 recordings are gone for good.
+2. **No original mocap data for the new UpperBody classes.** The newly added UB classes (UB-DL-AS-A, UB-DL-AS-G, UB-DL-SY-A, UB-SL-AS-A, UB-SL-AS-G, and the UB-DL-SY-G top-up) came with pre-computed 73-dim feature files (`results_json/`) only — no `bodyFrames` recordings. They train fine (the loader supports both formats), but they can't be displayed in the skeleton viewer and their features can't be recomputed if the feature pipeline ever changes.
+
+## Daily Updates
+
+| Date | Update |
+|:-----|:-------|
+| 2026-07-14 | Updated all accuracy tables and confusion heatmaps with the re-trained models. The pre-update benchmark README is archived on branch `benchmark-without-complete-data`. |
+| 2026-07-13 | Received the new LimbExpression data (5 new UB classes + 33 new UB-DL-SY-G recordings), split it into `limb_expression_raw` train/val/test (70/15/15, seed 42), and re-trained LimbExpression (96.2% per-bit val), Space (97.0%), and Spine (80.5% val). |
+
+---
+
 ## Current Barriers
 
 1. **Wrong data labels.** Some recordings are labeled incorrectly — e.g. the sample below is labeled Extension (E) but is actually forward-leaning (F) from frame ~90 onward. Label noise like this caps the achievable accuracy no matter the architecture: the model gets penalized for predicting the *true* movement.
@@ -225,7 +249,7 @@ Runs all four regions on both the **val** and **test** splits, finds each region
 - **Cross-label existing recordings.** Every recording already contains movement in all four regions — a session recorded for FloorSupport can also be labeled for Spine, LimbExpression, and Space. This could fill missing categories (SR/U, UB combos, M/L/T) without new capture sessions.
 - **Data augmentation:** time warping, left-right mirroring, Gaussian noise, frame dropout. *(Tested on Spine: temporal jitter + noise + frame dropout gave 71.2% vs 74.6% baseline — augmentation can't fix label noise; clean labels first.)*
 - **AI-generated data:** motion diffusion models conditioned on missing combos → human expert labels → training set.
-- **More data needed:** HN+S (FloorSupport), SR/U (Spine), all UB combos (LimbExpression), M/L/T combos (Space).
+- **More data needed:** HN+S (FloorSupport), more LF (Spine), the 7 remaining combos (LimbExpression), L/T combos + SP+M (Space).
 
 ---
 
