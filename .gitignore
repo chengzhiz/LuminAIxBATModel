@@ -1,9 +1,5 @@
-# Datasets — large binary/JSON data, not tracked
+# Datasets — large JSON data, kept local only (not pushed to GitHub)
 **/dataset/
-!**/dataset/create_dataset_splits.py
-
-# Model checkpoints (PyTorch .pt)
-**/checkpoints/
 
 # Exported ONNX models (large binaries, deployed separately)
 *.onnx
@@ -34,7 +30,3 @@ __pycache__/
 # Cloned Unity app (not part of the training repo)
 LuminAI-master/
 __bat/
-
-# Space directory — ignore subproject but track model code
-Space/dataset/
-Space/checkpoints/
